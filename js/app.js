@@ -17,7 +17,7 @@ export const TABS = [
 export const TOOLS = [
   {
     id: 'ins', tab: 'tools', title: 'Inertialnavigation', sub: 'Koppelnavigation',
-    icon: `<svg viewBox="0 0 64 64" ${stroke}><path d="M8 50C24 64 22 30 34 30S46 8 56 12"/><circle cx="8" cy="50" r="4" fill="currentColor" stroke="none"/><path d="M51.1 4.5 56 12l-8.8 2.1"/></svg>`
+    icon: `<svg viewBox="0 0 64 64" ${stroke}><path d="M8 46C18 60 26 46 30 34S40 15 47 15"/><circle cx="8" cy="46" r="3.8" fill="currentColor" stroke="none"/><path d="M46 8.5 57 15 46 21.5Z" fill="currentColor" stroke-width="1.5"/></svg>`
   },
   {
     id: 'sunfix', tab: 'tools', title: 'Sonnenortung', sub: 'Position ohne GPS',
