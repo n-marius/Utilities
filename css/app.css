@@ -192,6 +192,10 @@ button { cursor: pointer; }
 .btn:disabled { opacity: .4; pointer-events: none; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .btn.primary:active { opacity: .85; }
+@media (prefers-color-scheme: dark) {
+  /* Keine großen hellen Flächen bei Nacht */
+  .btn.primary { background: #2a0703; border-color: var(--accent); color: var(--accent); }
+}
 .btn.danger { color: var(--danger); }
 .btn.block { width: 100%; }
 .btn.icon { padding: 0; width: 44px; }
