@@ -4,6 +4,7 @@
 
 import { load, save } from './store.js';
 import { h } from './ui.js';
+import { offlineBaseLayer } from './basemap.js';
 
 export const LAYERS = {
   standard: {
@@ -33,6 +34,10 @@ export function createMap(container, opts = {}) {
     worldCopyJump: true
   });
   map.attributionControl.setPrefix(false);
+  // Offline-Grundkarte unter den Kacheln (Pane 150 < Kachel-Pane 200)
+  map.createPane('basemap').style.zIndex = 150;
+  offlineBaseLayer().addTo(map);
+  map.attributionControl.addAttribution('Natural Earth');
 
   let layer = null;
   let layerKey = load('map:layer', 'standard');

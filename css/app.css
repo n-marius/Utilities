@@ -23,6 +23,15 @@
   --map-acc-fill: rgba(26, 115, 232, .15);
   --map-track: #1d438f;
   --map-alt: #c4302b;
+  /* Offline-Grundkarte */
+  --bm-water: #d9e3ec;
+  --bm-land: #f5f4f0;
+  --bm-border: #a9a49a;
+  --bm-admin: #cbc6bc;
+  --bm-river: #b7c9da;
+  --bm-text: #4a4c52;
+  --bm-halo: rgba(245, 244, 240, .9);
+  --bm-grid: rgba(29, 67, 143, .10);
   --radius: 18px;
   --radius-s: 12px;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, system-ui, sans-serif;
@@ -60,6 +69,14 @@
     --map-acc-fill: rgba(255, 59, 38, .14);
     --map-track: #ff3b26;
     --map-alt: #ff3b26;
+    --bm-water: #000000;
+    --bm-land: #110201;
+    --bm-border: #6a160d;
+    --bm-admin: #3a0a06;
+    --bm-river: #2a0603;
+    --bm-text: #a51d12;
+    --bm-halo: rgba(0, 0, 0, .9);
+    --bm-grid: #1f0402;
     color-scheme: dark;
   }
 }
