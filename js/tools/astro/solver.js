@@ -14,7 +14,8 @@
 //    nur zulässige Lösungen bleiben) plus Gitterprüfung um jeden Kandidaten. Leere Menge = widersprüchlich.
 
 import { altAzFromLHA, apparentToTrue } from './sun.js';
-import { bodyGP } from './bodies.js';
+import { bodyGP, bodyName } from './bodies.js';
+import { PLANETS } from './catalog.js';
 import { distance, destination } from '../../lib/geo.js';
 
 const D2R = Math.PI / 180;
@@ -544,6 +545,7 @@ export function analyze(obsAll, sol, opts = {}) {
     }
 
     const rowFlags = {};
+    const swaps = {};
     const inconsistent = !regions.length;
     const main = sol.solutions[0];
     if (inconsistent || main.worst > 1) {
@@ -554,18 +556,33 @@ export function analyze(obsAll, sol, opts = {}) {
         if (per[j] > 1) rowFlags[sol.used[j]] = `Abweichung ${per[j].toFixed(1)}× Fehlergrenze`;
       }
       // Weglassprobe: welche einzelne Zeile macht den Rest widerspruchsfrei?
-      if (inconsistent && data.length >= 3) {
+      if (inconsistent && data.length >= 2) {
         const sus = [];
-        for (let j = 0; j < data.length; j++) {
+        for (let j = 0; j < data.length && data.length >= 3; j++) {
           const rest = data.filter((_, x) => x !== j);
           const r = lm(main.p, rest, L, main.ctx);
           if (fmax(r.p, rest, L, main.ctx) <= 1) sus.push(sol.used[j]);
+        }
+        // Verwechslung? Widersprüchliche Planetenmessung probeweise einem anderen Planeten zuordnen
+        for (let j = 0; j < data.length; j++) {
+          if (!String(data[j].body).startsWith('planet:')) continue;
+          for (const pl of PLANETS) {
+            const alt = 'planet:' + pl.id;
+            if (alt === data[j].body) continue;
+            const swapped = data.map((o, x) => (x === j ? { ...o, body: alt } : o));
+            const r = lm(main.p, swapped, L, main.ctx);
+            if (fmax(r.p, swapped, L, main.ctx) <= 1) {
+              swaps[sol.used[j]] = `Passt zu ${bodyName(alt)} statt ${bodyName(data[j].body)} – Verwechslung?`;
+              break;
+            }
+          }
         }
         if (sus.length) {
           // eindeutige Kandidaten gefunden: nur diese markieren
           for (const key of Object.keys(rowFlags)) delete rowFlags[key];
           for (const j of sus) rowFlags[j] = 'Vermutlich Ausreißer: ohne diese Zeile sind die übrigen Messungen widerspruchsfrei';
         }
+        for (const [j, t] of Object.entries(swaps)) rowFlags[j] = t;
       }
     }
     return { regions, inconsistent, lonOpen, rowFlags, accepted, runs, points: pts };

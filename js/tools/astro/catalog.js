@@ -118,3 +118,27 @@ export const PLANETS = [
   { id: 'jupiter', name: 'Jupiter' },
   { id: 'saturn', name: 'Saturn' }
 ];
+
+// Helle Sterne nahe der Ekliptik (SIMBAD, J2000) – zur Einordnung von Planeten („nächster heller Stern“).
+export const ECLIPTIC_STARS = [
+  S('Aldebaran', 68.98016, 16.5093, 0.86), S('Regulus', 152.09296, 11.96721, 1.40),
+  S('Spica', 201.29825, -11.16132, 0.97), S('Antares', 247.35192, -26.432, 0.91),
+  S('Pollux', 116.32896, 28.0262, 1.14), S('Castor', 113.64947, 31.88828, 1.58),
+  S('Elnath', 81.57297, 28.60745, 1.65), S('Plejaden (Alcyone)', 56.87115, 24.10514, 2.87),
+  S('Hamal', 31.79336, 23.46242, 2.01), S('Nunki', 283.81636, -26.29672, 2.07),
+  S('Kaus Australis', 276.04299, -34.38462, 1.81), S('Zubenelgenubi', 222.71964, -16.04178, 2.75),
+  S('Deneb Algedi', 326.76018, -16.12729, 2.83), S('Denebola', 177.26491, 14.57206, 2.13),
+  S('Sadalsuud', 322.88972, -5.57117, 2.89), S('Menkar', 45.56989, 4.08974, 2.53),
+  S('Alpheratz', 2.09692, 29.09043, 2.06)
+];
+
+// Tierkreis-Sternbilder entlang der Ekliptik: Beginn (ekliptikale Länge J2000, Grad) nach den IAU-Grenzen,
+// gemessen auf der Ekliptik selbst. Für Planeten (Breite bis ~8°) nur eine Näherung.
+export const ZODIAC = [
+  [28.7, 'Widder'], [53.4, 'Stier'], [90.1, 'Zwillinge'], [118.2, 'Krebs'], [138.0, 'Löwe'],
+  [174.2, 'Jungfrau'], [218.0, 'Waage'], [241.0, 'Skorpion'], [247.7, 'Schlangenträger'],
+  [266.3, 'Schütze'], [299.7, 'Steinbock'], [327.5, 'Wassermann'], [351.6, 'Fische']
+];
+
+/** Farbe mit bloßem Auge. */
+export const PLANET_COLOR = { venus: 'weiß', mars: 'rötlich', jupiter: 'weißgelb', saturn: 'gelblich' };

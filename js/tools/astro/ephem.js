@@ -9,7 +9,7 @@
 // geozentrisch gegen das Erde-Mond-Baryzentrum (Abweichung zur Erde ≤ ~25″ bei Venus), mit Lichtlaufzeit.
 
 import { julianDay, gmst, DELTA_T } from './sun.js';
-import { STARS } from './catalog.js';
+import { STARS, ECLIPTIC_STARS, ZODIAC } from './catalog.js';
 
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 const AS2R = D2R / 3600;
@@ -131,4 +131,82 @@ export function starGP(key, ms) {
 export function planetGP(key, ms) {
   const pl = planetPlace(key, ms);
   return { dec: pl.dec, gha: wrap360(gmst(julianDay(ms)) - pl.ra) };
+}
+
+// ---------- Planeten ohne Ortskenntnis einordnen ----------
+
+
+const toEcl = v => [v[0], Math.cos(EPS0) * v[1] + Math.sin(EPS0) * v[2], -Math.sin(EPS0) * v[1] + Math.cos(EPS0) * v[2]];
+const len = v => Math.hypot(v[0], v[1], v[2]);
+const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (len(a) * len(b))))) * R2D;
+
+/**
+ * Scheinbare Helligkeit nach Mallama & Hilton (2018, Astronomical Almanac), ohne Oberflächen-/
+ * Orientierungsterme (Mars ±0,1 mag) – Vergleich mit JPL Horizons siehe Bericht.
+ * r, delta in AE, alpha = Phasenwinkel (Grad), B = Ringöffnung Saturn (Grad, Betrag).
+ */
+export function planetMag(key, r, delta, alpha, B = 0) {
+  const d = 5 * Math.log10(r * delta);
+  const a = alpha;
+  switch (key) {
+    case 'venus': return d + (a <= 163.7
+      ? -4.384 - 1.044e-3 * a + 3.687e-4 * a ** 2 - 2.814e-6 * a ** 3 + 8.938e-9 * a ** 4
+      : 236.05828 - 2.81914 * a + 8.39034e-3 * a ** 2);
+    case 'mars': return d - 1.601 + 2.267e-2 * a - 1.302e-4 * a * a;
+    case 'jupiter': return d - 9.395 - 3.7e-4 * a + 6.16e-4 * a * a;
+    case 'saturn': {
+      const sB = Math.sin(Math.abs(B) * D2R);
+      return d - 8.914 - 1.825 * sB + 2.6e-2 * a - 0.378 * sB * Math.exp(-2.25 * a);
+    }
+    default: return NaN;
+  }
+}
+
+/**
+ * Ortsunabhängige Kenndaten eines Planeten zur Zeit ms:
+ * {mag, elong (Grad, + = östlich der Sonne = Abendhimmel), zodiac, near:{name, sep}, lambda, beta}
+ */
+export function planetInfo(key, ms) {
+  const T = tCent(ms);
+  const E = helio('earth', T);
+  let P = helio(key, T), g;
+  for (let k = 0; k < 2; k++) {
+    g = [P[0] - E[0], P[1] - E[1], P[2] - E[2]];
+    P = helio(key, T - len(g) * 0.0057755183 / 36525);
+  }
+  g = [P[0] - E[0], P[1] - E[1], P[2] - E[2]];
+  const r = len(P), delta = len(g), R = len(E);
+  const alpha = Math.acos(Math.max(-1, Math.min(1, (r * r + delta * delta - R * R) / (2 * r * delta)))) * R2D;
+  let B = 0;
+  if (key === 'saturn') {
+    // Ringöffnung: planetozentrische Breite der Erde; Saturn-Nordpol J2000 (IAU): α 40,589°, δ 83,537°
+    const n = vec(40.589 * D2R, 83.537 * D2R);
+    const toE = g.map(x => -x / delta);
+    B = Math.asin(n[0] * toE[0] + n[1] * toE[1] + n[2] * toE[2]) * R2D;
+  }
+  const sun = E.map(x => -x);
+  const ge = toEcl(g), se = toEcl(sun);
+  const lambda = wrap360(Math.atan2(ge[1], ge[0]) * R2D);
+  const beta = Math.atan2(ge[2], Math.hypot(ge[0], ge[1])) * R2D;
+  const lsun = wrap360(Math.atan2(se[1], se[0]) * R2D);
+  const dl = ((lambda - lsun + 540) % 360) - 180;
+  const elong = angle(g, sun) * Math.sign(dl || 1);
+  let zodiac = 'Fische';
+  for (const [start, name] of ZODIAC) if (lambda >= start) zodiac = name;
+  if (lambda < 28.7) zodiac = 'Fische';
+  const rd = radec(g);
+  let near = null;
+  for (const s of ECLIPTIC_STARS) {
+    const sep = angle(vec(rd.ra * D2R, rd.dec * D2R), vec(s.ra * D2R, s.dec * D2R));
+    if (!near || sep < near.sep) near = { name: s.name, sep };
+  }
+  return { mag: planetMag(key, r, delta, alpha, B), elong, zodiac, near, lambda, beta, alpha, B, r, delta };
+}
+
+/** Sichtbarkeit aus der Elongation (ohne Ortskenntnis). */
+export function visibility(elong) {
+  const e = Math.abs(elong);
+  if (e < 15) return 'nicht sichtbar – zu nah an der Sonne';
+  if (e > 150) return 'fast die ganze Nacht';
+  return elong > 0 ? 'Abendhimmel' : 'Morgenhimmel';
 }

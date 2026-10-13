@@ -107,7 +107,7 @@ const fmtDecl = d => `${fmt(Math.abs(d), 1)}° ${d >= 0 ? 'O' : 'W'}`;
 
 /**
  * Werkzeug einhängen.
- * cfg: {key (Speicherpräfix), picker? ({el, current() -> {body, name}}), objectColumn, aimIcon,
+ * cfg: {key (Speicherpräfix), picker? ({el, current() -> {body, name}, onTime?(ms)}), objectColumn, aimIcon,
  *       hint(obj), note(obj), footExtra?}
  */
 export function mountFix(body, ctx, cfg) {
@@ -233,6 +233,7 @@ export function mountFix(body, ctx, cfg) {
     const tTxt = set.timeMode === 'empty' ? 'ohne Uhrzeit' : localTime(e);
     const uTxt = set.timeMode === 'empty' ? '' : ` (UTC ${set.dateMode === 'empty' ? '' : utcDate(e) + ' '}${utcTime(e)})`;
     nextLine.textContent = `Nächste Messung: ${dTxt} · ${tTxt}${uTxt}`;
+    if (cfg.picker && cfg.picker.onTime) cfg.picker.onTime(e.getTime());
   }
   tick();
   const tickTimer = setInterval(tick, 1000);
