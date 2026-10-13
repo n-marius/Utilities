@@ -23,7 +23,7 @@ import { meanAngle, circStd, mean, std, wrap360, wrap180, R2D, D2R } from '../..
 import { createMap, posMarker, accuracyCircle } from '../../lib/map.js';
 import { declination } from '../../lib/magdecl.js';
 import { load, save } from '../../lib/store.js';
-import { solve, analyze, rowToObs, makeDeclTable } from './solver.js';
+import { solve, analyze, rowToObs, makeDeclTable, BIAS_MIN_OBS, BIAS_WARN, BIAS_REST } from './solver.js';
 import { bodyName } from './bodies.js';
 
 const COUNTDOWN = 5;
@@ -45,7 +45,7 @@ const STYLE = `
 .fix-table td.fix-obj { white-space: nowrap; max-width: 92px; overflow: hidden; text-overflow: ellipsis; }
 .fix-edit .banner { margin-top: 10px; }
 .fix-notes { display: flex; flex-direction: column; gap: 4px; }
-.fix-set { display: grid; grid-template-columns: 46px 1fr; align-items: center; gap: 10px 10px; }
+.fix-set { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 10px 10px; }
 .fix-set > label { font-size: 14px; color: var(--text-2); }
 .fix-manual { grid-column: 2; display: flex; align-items: center; gap: 10px; }
 .fix-manual .input { flex: 1; min-width: 0; }
@@ -126,7 +126,7 @@ export function mountFix(body, ctx, cfg) {
     if (r.src === 'abs') r.sZ = Math.max(0, (r.sZ || 0) - 5);
     r.eh = AIM + r.sh; r.eZ = AIM + r.sZ; r.v = 2;
   }
-  const set = Object.assign({ dateMode: 'auto', timeMode: 'auto', dayOffset: 0, timeOffset: 0 }, load(KEY_SET, {}));
+  const set = Object.assign({ dateMode: 'auto', timeMode: 'auto', dayOffset: 0, timeOffset: 0, bias: 'auto' }, load(KEY_SET, {}));
   let selected = null;
   let result = null, mcRes = null, rowFlags = {};
   let token = 0, recalcTimer = 0;
@@ -152,10 +152,14 @@ export function mountFix(body, ctx, cfg) {
   const dateSeg = seg(modes, set.dateMode, v => { set.dateMode = v; saveSet(); tick(); });
   const timeSeg = seg(modes, set.timeMode, v => { set.timeMode = v; saveSet(); tick(); });
   const nextLine = h('div.fix-next');
+  // Kompassversatz mitschätzen (Standard an, wirkt ab BIAS_MIN_OBS Messungen)
+  const biasSeg = seg([{ value: 'auto', label: 'Versatz schätzen' }, { value: 'off', label: 'Aus' }], set.bias,
+    v => { set.bias = v; saveSet(); scheduleRecalc(); });
   const setCard = h('div.card',
     h('div.fix-set',
       h('label', 'Datum'), dateSeg, dateRow,
-      h('label', 'Zeit'), timeSeg, timeRow),
+      h('label', 'Zeit'), timeSeg, timeRow,
+      h('label', 'Kompass'), biasSeg),
     nextLine);
 
   // ---------- Knopfleiste + Tabelle ----------
@@ -180,7 +184,10 @@ export function mountFix(body, ctx, cfg) {
     'Lösungsbereich = alle Orte, an denen jede Messung innerhalb ihrer Grenze liegt (Monte Carlo mit Störungen innerhalb der Grenzen, ',
     `nur zulässige Lösungen, ${MC_RUNS} Durchläufe, plus Gitterprüfung); Kreis = größter Abstand zulässiger Orte vom Mittelpunkt. `,
     'Getrennte Bereiche werden alle gleichrangig angezeigt. Azimut magnetisch gemessen, Missweisung nach WMM2025; ',
-    'Höhe mit Refraktion (Normalatmosphäre) korrigiert.', cfg.footExtra ? ' ' + cfg.footExtra : '');
+    'Höhe mit Refraktion (Normalatmosphäre) korrigiert. ',
+    `Kompassversatz (ab ${BIAS_MIN_OBS} Messungen, abschaltbar): Der systematische Anteil (Kompassgenauigkeit des Geräts) wird durch einen gemeinsamen, mitgeschätzten Versatz ersetzt; je Messung bleibt ±(0,5° + 2σ). `,
+    `Deviation ist teils richtungsabhängig – der gemeinsame Versatz ist eine Näherung; bei Azimuten über mehr als 90° verteilt gilt je Messung zusätzlich ${BIAS_REST}° Restgrenze.`,
+    cfg.footExtra ? ' ' + cfg.footExtra : '');
 
   const parts = [mapEl, stats, progress, notesEl, h('div.section-title', 'Messungen'),
     cfg.picker && cfg.picker.el, setCard, sensorBanner, bar, tableCard, editCard, foot].filter(Boolean);
@@ -244,7 +251,8 @@ export function mountFix(body, ctx, cfg) {
   function renderTable() {
     tbody.textContent = '';
     const one = mcRes && !mcRes.inconsistent && mcRes.regions.length === 1 && mcRes.regions[0].decl != null;
-    const decl = one ? mcRes.regions[0].decl : null;
+    // rechtweisend = magnetisch + Missweisung + geschätzte Kompasskorrektur
+    const decl = one ? mcRes.regions[0].decl + (mcRes.regions[0].bias || 0) : null;
     if (!rows.length) {
       tbody.append(h('tr.fix-empty', h('td', { colSpan: cfg.objectColumn ? 7 : 6 }, 'Noch keine Messungen. Mit + messen.')));
     }
@@ -261,7 +269,7 @@ export function mountFix(body, ctx, cfg) {
         h('td.r', `${fmt(r.h, 1)}°`),
         azCell,
         h('td.r', fmt(r.eh, 1)),
-        h('td.r', fmt(r.eZ, 1)));
+        h('td.r', fmt(azBound(i, r), 1)));
       if (r.id === selected) tr.classList.add('is-selected');
       if (flagOf(i)) tr.classList.add('fix-bad');
       tbody.append(tr);
@@ -269,6 +277,12 @@ export function mountFix(body, ctx, cfg) {
     minusBtn.disabled = !rows.some(r => r.id === selected);
     clearBtn.disabled = !rows.length;
     renderEditor();
+  }
+
+  /** In der Rechnung verwendete Azimutgrenze (mit Versatzschätzung nur der zufällige Anteil). */
+  function azBound(i, r) {
+    const j = result && result.ok ? result.used.indexOf(i) : -1;
+    return j >= 0 && result.eZused ? result.eZused[j] : r.eZ;
   }
 
   /** Hinweis zu einer Zeile (Einzelprüfung oder Widerspruchsanalyse) oder null. */
@@ -304,7 +318,8 @@ export function mountFix(body, ctx, cfg) {
           h('div.fix-in', tIn, h('button.btn', { type: 'button', onclick: () => { tIn.value = ''; apply(); } }, 'Leer')))),
       h('div.fix-meta',
         h('div', `Erfasst (Geräteuhr): ${deDate(localDate(cap))} ${localTime(cap)}`),
-        h('div', `Höhe ${fmt(r.h, 2)}° ± ${fmt(r.eh, 2)}° (Sensor ${fmt(r.sh, 2)}°) · Azimut ${fmt(r.az, 1)}° mag. ± ${fmt(r.eZ, 1)}° (Sensor ${fmt(r.sZ, 1)}°)`),
+        h('div', `Höhe ${fmt(r.h, 2)}° ± ${fmt(r.eh, 2)}° (Sensor ${fmt(r.sh, 2)}°) · Azimut ${fmt(r.az, 1)}° mag. ± ${fmt(r.eZ, 1)}° (Sensor ${fmt(r.sZ, 1)}°)` +
+          (r.eZr != null ? `, davon zufällig ±${fmt(r.eZr, 1)}°` : '')),
         h('div', `${r.n} Samples${r.src === 'ios' ? ' · Kompass iOS' : r.src === 'ios-direct' ? ' · Kompass iOS (ohne Abgleich)' : r.src === 'abs' ? ' · absolute Lage' : ''}` +
           (r.acc != null ? ` · gemeldete Kompassgenauigkeit ±${fmt(r.acc, 0)}°` : r.src === 'abs' ? ' · Kompassgenauigkeit vom Gerät nicht gemeldet' : ''))),
       (() => {
@@ -345,7 +360,7 @@ export function mountFix(body, ctx, cfg) {
     const year = new Date(tMid).getUTCFullYear();
     if (!declTable || declYear !== year) { declTable = makeDeclTable(declination, new Date(tMid)); declYear = year; }
     try {
-      result = solve(obs, { table: declTable });
+      result = solve(obs, { table: declTable, compassBias: set.bias !== 'off' });
       result.obs = obs;
     } catch (e) {
       console.error(e);
@@ -428,10 +443,14 @@ export function mountFix(body, ctx, cfg) {
       ? copyText(`${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}`, 'Koordinaten kopiert')
       : copyText(s.lat.toFixed(4), 'Breite kopiert');
 
+    // Anzeige als Kompassfehler (Anzeige minus wahr) = −Korrektur
+    const biasOf = s => s.bias == null ? null : `${-s.bias >= 0 ? '+' : '−'}${fmt(Math.abs(s.bias), 1)}°`;
+    const biasRng = s => s.biasRange ? `${fmt(-s.biasRange[1], 1)} … ${fmt(-s.biasRange[0], 1)}°` : '';
     regs.forEach((s, i) => {
       const details = multi ? [
         `${radLabel} ${radOf(s)}` + (s.decl != null ? ` · ${declLabel} ${fmtDecl(s.decl)}` : ''),
-        [dateOf(s) && `Datum (berechnet) ${dateOf(s)}`, dtOf(s) && `Uhrkorrektur ${dtOf(s)}`].filter(Boolean).join(' · ')
+        [dateOf(s) && `Datum (berechnet) ${dateOf(s)}`, dtOf(s) && `Uhrkorrektur ${dtOf(s)}`,
+          biasOf(s) && `Kompassversatz ${biasOf(s)} (${biasRng(s)})`].filter(Boolean).join(' · ')
       ] : [];
       const el = tile(multi ? `Lösung ${i + 1}` : 'Position', posText(s), '', true, dmText(s), ...details);
       el.classList.add('fix-pos');
@@ -447,6 +466,11 @@ export function mountFix(body, ctx, cfg) {
       if (s.decl != null) tiles.push(tile(declLabel, fmtDecl(s.decl)));
       if (dateOf(s)) tiles.push(tile('Datum (berechnet)', dateOf(s)));
       if (dtOf(s)) tiles.push(tile('Uhrkorrektur', dtOf(s)));
+      if (biasOf(s)) {
+        const t = tile('Kompassversatz', biasOf(s));
+        if (s.biasRange) t.append(h('div.fix-dm', `Spanne ${biasRng(s)}`));
+        tiles.push(t);
+      }
       if (band && res && Number.isFinite(s.latHalf)) tiles[0].querySelector('.v').append(h('small', `≈ ${fmt(s.latHalf * 111.195, 0)} km`));
     }
     if (tiles.length % 2) tiles[tiles.length - 1].classList.add('fix-wide');
@@ -490,6 +514,7 @@ export function mountFix(body, ctx, cfg) {
     }
     if (res && !band && regs.some(s => s.radius > 3000000)) notes.unshift('Bereich sehr groß – weitere Messungen (andere Richtung oder späterer Zeitpunkt) verkleinern ihn.');
     if (res && regs.some(s => s.tight)) notes.push('Messungen nur knapp vereinbar – markierte Zeile prüfen.');
+    if (res && regs.some(s => s.bias != null && Math.abs(s.bias) > BIAS_WARN)) notes.unshift(`Kompassversatz unplausibel groß (über ${BIAS_WARN}°) – Kompass kalibrieren (Acht-Bewegung), Störquellen meiden, Messungen prüfen.`);
     if (multi) notes.push(`Mehrdeutig: ${regs.length} gleichwertige Lösungen`);
     for (const n of notes) notesEl.append(h('div.banner' + (/nicht bestimmbar|Unterbestimmt|unplausibel|groß|knapp|Mehrdeutig|kaum/.test(n) ? '.warn' : ''), n));
 
@@ -613,7 +638,8 @@ export function mountFix(body, ctx, cfg) {
     // Sensoranteil: gemessene Streuung (2σ) bzw. vom Gerät gemeldete Kompassgenauigkeit – keine Aufschläge
     const acc = accs.length ? mean(accs) : null;
     const sh = 2 * std(hs);
-    const sZ = Math.max(2 * (azs.length > 1 ? circStd(azs) : 0), acc ?? 0);
+    const s2Z = 2 * (azs.length > 1 ? circStd(azs) : 0);
+    const sZ = Math.max(s2Z, acc ?? 0);
     const e = effective();
     const row = {
       id: Date.now(),
@@ -622,6 +648,8 @@ export function mountFix(body, ctx, cfg) {
       time: set.timeMode === 'empty' ? null : localTime(e),
       body: obj.body,
       h: alt, az, sh, sZ, acc, v: 2,
+      // zufälliger Anteil (für die Schätzung eines gemeinsamen Kompassversatzes)
+      s2Z, eZr: AIM + s2Z,
       // Fehlergrenzen exakt 0,5° (Ausrichtung) + Sensor; so gehen sie in Ausgleich (Normierung) und Monte Carlo (±eh/±eZ) ein
       eh: AIM + sh, eZ: AIM + sZ,
       n: win.length, src: withAz[withAz.length - 1].src

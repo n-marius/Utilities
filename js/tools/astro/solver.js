@@ -7,7 +7,11 @@
 //  - D:  gemeinsamer Datumsversatz (Tage) der Zeilen ohne Datum,
 //  - m:  Missweisung als Unbekannte, wenn keine Zeile eine Uhrzeit hat (Länge dann unbestimmbar,
 //        Missweisung also nicht aus dem Modell ablesbar) – mit schwacher Vorgabe aus WMM entlang der Breite.
-// Residuen: (h_ber − h_wahr)/eh und Winkeldiff(Z_ber − (Z_mag + Missweisung))/eZ.
+//  - δ:  gemeinsamer systematischer Kompassversatz (Option compassBias, ab 3 Messungen). Dann gilt je
+//        Messung nur die zufällige Azimutgrenze eZr = 0,5° + 2σ; der systematische Anteil (iOS-Kompass-
+//        genauigkeit) wird durch δ ersetzt. Kompassdeviation ist teils richtungsabhängig, ein gemeinsamer
+//        Versatz ist eine Näherung: bei Azimutspreizung > 90° bleibt je Messung eine Restgrenze von 2°.
+// Residuen: (h_ber − h_wahr)/eh und Winkeldiff(Z_ber − (Z_mag + Missweisung + δ))/eZ.
 // 1) solve(): Kandidaten = lokale Minima der Fehlerquadratsumme (Levenberg-Marquardt nach Grobsuche).
 // 2) analyze(): Mengen-Ansatz. Lösungsbereich = alle Orte, an denen JEDE Messung innerhalb ihrer
 //    Grenze erfüllt ist (max |r_i| ≤ 1). Bestimmt per Monte Carlo (Störung innerhalb der Grenzen,
@@ -36,7 +40,10 @@ export function rowToObs(row) {
   return {
     t: new Date(y, mo, d, H, Mi, S, ms).getTime(),
     hasDate: !!row.date, hasTime: !!row.time, body: row.body || 'sun',
-    h: row.h, az: row.az, eh: row.eh, eZ: row.eZ
+    h: row.h, az: row.az, eh: row.eh, eZ: row.eZ,
+    // zufälliger Anteil der Azimutgrenze (0,5° + 2σ); ältere Zeilen ohne getrennte Angabe: ohne Gerätewert
+    // ist eZ bereits zufällig, mit Gerätewert (iOS) und unbekanntem 2σ wird 2σ = 0 angenommen
+    eZr: row.eZr ?? (row.acc == null || !(row.sZ <= row.acc) ? row.eZ : 0.5)
   };
 }
 
@@ -92,15 +99,42 @@ function declAlongLat(table, lat) {
 
 // ---------- Modell ----------
 
-function layout(obs) {
+export const BIAS_MIN_OBS = 3;
+export const BIAS_REST = 2;      // Restgrenze je Messung bei Azimutspreizung > 90° (richtungsabhängige Deviation)
+export const BIAS_WARN = 30;     // |δ| darüber: unplausibel
+
+function layout(obs, opts = {}) {
   const anyTime = obs.some(o => o.hasTime);
   const allTime = obs.every(o => o.hasTime);
   const L = { lonKnown: anyTime, dtFree: anyTime && !allTime, dFree: obs.some(o => !o.hasDate), mFree: !anyTime, n: 2 };
+  const bias = !!opts.compassBias && obs.length >= BIAS_MIN_OBS;
+  // ohne Uhrzeit ist die Missweisung m ohnehin frei: Versatz und Missweisung sind dann nicht trennbar,
+  // m übernimmt beides (Vorgabe aus WMM entfällt)
+  L.biasFree = bias && !L.mFree;
+  L.mOpen = bias && L.mFree;
   if (L.dtFree) L.iDt = L.n++;
   if (L.dFree) L.iD = L.n++;
   if (L.mFree) L.iM = L.n++;
+  if (L.biasFree) L.iB = L.n++;
   L.nRes = obs.length * 2 + (L.mFree ? 1 : 0);
   return L;
+}
+
+/** Azimutspreizung (Grad): 360° minus größte Lücke der gemessenen Azimute. */
+function azSpread(data) {
+  const a = data.map(o => wrap360(o.az)).sort((x, y) => x - y);
+  if (a.length < 2) return 0;
+  let gap = 360 - a[a.length - 1] + a[0];
+  for (let i = 1; i < a.length; i++) gap = Math.max(gap, a[i] - a[i - 1]);
+  return 360 - gap;
+}
+
+/** Wirksame Azimutgrenze je Messung festlegen (mit Versatzschätzung: nur zufälliger Anteil + ggf. Restgrenze). */
+function azBounds(data, L) {
+  L.spread = azSpread(data);
+  L.rest = (L.biasFree || L.mOpen) && L.spread > 90 ? BIAS_REST : 0;
+  for (const o of data) o.eZe = (L.biasFree || L.mOpen) ? Math.min(o.eZ, (o.eZr ?? o.eZ)) + L.rest : o.eZ;
+  return data;
 }
 
 function prep(obs) {
@@ -123,16 +157,18 @@ function declOf(p, L, ctx) {
   return L.mFree ? p[L.iM] : ctx.table.at(p[0], p[1]) + ctx.corr;
 }
 
+const biasOf = (p, L) => (L.biasFree ? p[L.iB] : 0);
+
 function residualsRaw(p, data, L, ctx) {
   const out = new Float64Array(L.nRes);
-  const decl = declOf(p, L, ctx);
+  const decl = declOf(p, L, ctx) + biasOf(p, L);
   let k = 0;
   for (const o of data) {
     const { t, ghaShift } = obsTime(o, p, L);
     const gp = bodyGP(o.body, t);
     const r = altAzFromLHA(p[0], gp.dec, gp.gha - ghaShift + p[1]);
     out[k++] = (r.alt - o.hTrue) / o.eh;
-    out[k++] = wrap180(r.az - (o.az + decl)) / o.eZ;
+    out[k++] = wrap180(r.az - (o.az + decl)) / (o.eZe ?? o.eZ);
   }
   if (L.mFree) out[k++] = wrap180(p[L.iM] - ctx.m0) / ctx.sm;
   return out;
@@ -146,6 +182,7 @@ function normalize(p, L) {
   if (L.dtFree) p[L.iDt] = wrapP(p[L.iDt], 12);
   if (L.dFree) p[L.iD] = wrapP(p[L.iD], YEAR / 2);
   if (L.mFree) p[L.iM] = wrap180(p[L.iM]);
+  if (L.biasFree) p[L.iB] = wrap180(p[L.iB]);
   return p;
 }
 
@@ -267,20 +304,22 @@ function candidates(data, L, ctx) {
   if (L.dtFree) for (let x = -12; x < 12; x += 0.5) dtGrid.push(x);
   else dtGrid.push(0);
   const anchors = data.filter(o => !L.dtFree || o.hasTime).slice(0, 3);
+  const Bgrid = L.biasFree ? [-20, -8, 0, 8, 20] : [0];
   const out = [];
-  for (const D of Dgrid) {
+  for (const D of Dgrid) for (const B of Bgrid) {
     for (const o of anchors) {
       const p = new Array(L.n).fill(0);
       if (L.dFree) p[L.iD] = D;
+      if (L.biasFree) p[L.iB] = B;
       const { t, ghaShift } = obsTime(o, p, L);
       const gp = bodyGP(o.body, t);
       const gha = gp.gha - ghaShift;
       // Missweisung am (noch unbekannten) Ort: zweimal nachführen
-      let sols = closedForm(gp.dec, gha, o.hTrue, o.az);
+      let sols = closedForm(gp.dec, gha, o.hTrue, o.az + B);
       for (let k = 0; k < 2; k++) {
         sols = sols.flatMap(([lat, lon]) => {
           const dcl = L.mFree ? declAlongLat(ctx.table, lat).m0 : ctx.table.at(lat, lon) + ctx.corr;
-          return closedForm(gp.dec, gha, o.hTrue, o.az + dcl);
+          return closedForm(gp.dec, gha, o.hTrue, o.az + dcl + B);
         });
         // Duplikate grob entfernen
         sols = sols.filter((s, i) => sols.findIndex(q => Math.abs(q[0] - s[0]) < 0.5 && Math.abs(wrap180(q[1] - s[1])) < 0.5) === i);
@@ -318,7 +357,7 @@ function refine(sol, data, L, ctx0) {
   const ctx = { ...ctx0 };
   let r = sol;
   for (let k = 0; k < 3; k++) {
-    if (L.mFree) Object.assign(ctx, declAlongLat(ctx.table, r.p[0]));
+    if (L.mFree) Object.assign(ctx, declAlongLat(ctx.table, r.p[0]), L.mOpen ? { sm: 1e3 } : {});
     else ctx.corr = wrap180(ctx.table.exact(r.p[0], r.p[1]) - ctx.table.at(r.p[0], r.p[1]));
     r = lm(r.p, data, L, ctx);
   }
@@ -337,6 +376,7 @@ function describe(sol, data, L) {
     dtMin: L.dtFree ? p[L.iDt] * 60 : null,
     dDays: L.dFree ? p[L.iD] : null,
     decl: declOf(p, L, sol.ctx),
+    bias: L.biasFree ? p[L.iB] : null,
     rms: Math.sqrt(s / nObs), worst,
     resid: Array.from(res.slice(0, nObs))
   };
@@ -365,7 +405,7 @@ export function checkRows(obs) {
 /**
  * Kandidaten bestimmen.
  * obs: [{t, hasDate, hasTime, body, h (scheinbar), az (magnetisch), eh, eZ}]
- * opts: {table: makeDeclTable(...)}
+ * opts: {table: makeDeclTable(...), compassBias?: gemeinsamen Kompassversatz δ mitschätzen (ab 3 Messungen)}
  * Ergebnis: {ok, solutions:[Kandidaten], used:[Indizes der verwendeten Zeilen], flags:[je Zeile], layout, notes, …}
  */
 export function solve(obsAll, opts = {}) {
@@ -373,10 +413,11 @@ export function solve(obsAll, opts = {}) {
   const used = obsAll.map((o, i) => i).filter(i => !(flags[i] && flags[i].bad));
   if (!used.length) return { ok: false, reason: obsAll.length ? 'Keine plausiblen Messungen' : 'Keine Messungen', flags, used };
   const data = prep(used.map(i => obsAll[i]));
-  const L = layout(data);
+  const L = layout(data, opts);
+  azBounds(data, L);
   const table = opts.table || makeDeclTable(null);
   const ctx = { table, corr: 0, m0: 0, sm: 5 };
-  if (L.mFree) Object.assign(ctx, declAlongLat(table, 0));
+  if (L.mFree) Object.assign(ctx, declAlongLat(table, 0), L.mOpen ? { sm: 1e3 } : {});
 
   const cands = candidates(data, L, ctx);
   const picked = [];
@@ -403,9 +444,13 @@ export function solve(obsAll, opts = {}) {
   if (L.dFree && data.some(o => !o.hasDate && o.body !== 'sun')) notes.push('Ohne Datum ist die Länge aus Sternen/Planeten kaum bestimmbar (Sternzeit verschiebt sich um ~1° pro Tag).');
   if (under) notes.push(L.dFree ? 'Unterbestimmt: ohne Datum mehrere Messungen über einige Stunden nötig' : 'Unterbestimmt: weitere Messungen nötig');
   else if (L.dFree && data.length < 3) notes.push('Ohne Datum: Ergebnis schwach bestimmt – mehr Messungen verbessern es');
+  if (L.biasFree) notes.push('Kompassversatz wird mitgeschätzt (gemeinsamer Versatz – Näherung, Deviation ist teils richtungsabhängig).' +
+    (L.rest ? ` Azimute über ${Math.round(L.spread)}° verteilt: je Messung ${BIAS_REST}° Restgrenze.` : ''));
+  if (L.mOpen) notes.push('Kompassversatz und Missweisung sind ohne Uhrzeit nicht trennbar – gemeinsam geschätzt.');
   const nBad = flags.filter(f => f && f.bad).length;
   if (nBad) notes.push(`${nBad === 1 ? 'Eine Messung' : nBad + ' Messungen'} unplausibel und nicht verwendet`);
-  return { ok: true, ...solutions[0], solutions, lonKnown: L.lonKnown, layout: L, underdetermined: under, nObs: data.length, used, flags, notes };
+  return { ok: true, ...solutions[0], solutions, lonKnown: L.lonKnown, layout: L, underdetermined: under, nObs: data.length, used, flags, notes,
+    eZused: data.map(o => o.eZe) };
 }
 
 // ---------- Lösungsbereich (Mengen-Ansatz) ----------
@@ -422,8 +467,8 @@ export function solve(obsAll, opts = {}) {
 export function analyze(obsAll, sol, opts = {}) {
   const runs = opts.runs ?? 200, chunk = opts.chunk ?? 10;
   const rng = opts.rng || Math.random;
-  const data = prep(sol.used.map(i => obsAll[i]));
   const L = sol.layout;
+  const data = azBounds(prep(sol.used.map(i => obsAll[i])), L);
   const cands = sol.solutions.map(c => ({ ...c, F: fmax(c.p, data, L, c.ctx) }));
   const pts = [];
   const U = () => 2 * rng() - 1;
@@ -443,14 +488,14 @@ export function analyze(obsAll, sol, opts = {}) {
   function oneRun() {
     const pert = data.map(o => {
       const h = o.h + U() * o.eh;
-      return { ...o, h, hTrue: apparentToTrue(h), az: o.az + U() * o.eZ };
+      return { ...o, h, hTrue: apparentToTrue(h), az: o.az + U() * o.eZe };
     });
     const c = cands[k++ % cands.length];
     const ctx = { ...c.ctx };
     const p = c.p.slice();
     if (L.dFree) p[L.iD] = U() * YEAR / 2;
     if (L.dtFree) p[L.iDt] = U() * 12;
-    if (L.mFree) {
+    if (L.mFree && !L.mOpen) {
       // Missweisung an zufälliger Länge auf der geschätzten Breite
       ctx.m0 = ctx.table.at(c.lat, U() * 180);
       ctx.sm = 1;
@@ -458,7 +503,7 @@ export function analyze(obsAll, sol, opts = {}) {
     }
     for (const start of [p, c.p]) {
       const r = lm(start, pert, L, ctx);
-      if (fmax(r.p, data, L, c.ctx) <= 1) { pts.push({ lat: r.p[0], lon: r.p[1] }); accepted++; return; }
+      if (fmax(r.p, data, L, c.ctx) <= 1) { pts.push({ lat: r.p[0], lon: r.p[1], bias: biasOf(r.p, L) }); accepted++; return; }
     }
   }
 
@@ -474,7 +519,7 @@ export function analyze(obsAll, sol, opts = {}) {
         for (let b = 0; b < B; b++) {
           const [lat, lon] = destination(p0[0], p0[1], b * 360 / B, R * ring / K);
           const q = p0.slice(); q[0] = lat; q[1] = lon;
-          if (fmax(q, data, L, c.ctx) <= 1) { feas.push({ lat, lon }); maxRing = ring; }
+          if (fmax(q, data, L, c.ctx) <= 1) { feas.push({ lat, lon, bias: biasOf(q, L) }); maxRing = ring; }
         }
       }
       out = feas;
@@ -507,12 +552,17 @@ export function analyze(obsAll, sol, opts = {}) {
         let best = Infinity;
         for (const a of g) { let s = 0; for (const b of g) s += dist(a, b); if (s < best) { best = s; ctr = { lat: a.lat, lon: L.lonKnown ? a.lon : 0 }; } }
       }
-      let radius = 0, latHalf = 0;
-      for (const q of g) { radius = Math.max(radius, dist(q, ctr)); latHalf = Math.max(latHalf, Math.abs(q.lat - ctr.lat)); }
+      let radius = 0, latHalf = 0, bMin = Infinity, bMax = -Infinity;
+      for (const q of g) {
+        radius = Math.max(radius, dist(q, ctr)); latHalf = Math.max(latHalf, Math.abs(q.lat - ctr.lat));
+        bMin = Math.min(bMin, q.bias); bMax = Math.max(bMax, q.bias);
+      }
       regions.push({
         lat: ctr.lat, lon: L.lonKnown ? ctr.lon : null,
         radius: L.lonKnown ? radius : NaN, latHalf, count: g.length,
-        decl: c.decl, dDays: c.dDays, dtMin: c.dtMin, tight: c.worst > 1, src: i
+        decl: c.decl, dDays: c.dDays, dtMin: c.dtMin, tight: c.worst > 1, src: i,
+        bias: L.biasFree ? biasOf(c.center, L) : null,
+        biasRange: L.biasFree && g.length ? [bMin, bMax] : null
       });
     });
     // überlappende Bereiche (gleiche Talsohle) zusammenfassen – der Kreis umschließt beide
@@ -524,6 +574,7 @@ export function analyze(obsAll, sol, opts = {}) {
         if (L.lonKnown) host.radius = Math.max(host.radius, distance(host.lat, host.lon, r.lat, r.lon) + r.radius);
         host.latHalf = Math.max(host.latHalf, Math.abs(host.lat - r.lat) + r.latHalf);
         host.count += r.count;
+        if (host.biasRange && r.biasRange) host.biasRange = [Math.min(host.biasRange[0], r.biasRange[0]), Math.max(host.biasRange[1], r.biasRange[1])];
       } else merged.push({ ...r });
     }
     regions = merged.sort((a, b) => a.src - b.src);
@@ -540,7 +591,9 @@ export function analyze(obsAll, sol, opts = {}) {
         const lats = pts.map(q => q.lat).sort((a, b) => a - b);
         const lo = lats[0], hi = lats[lats.length - 1];
         regions = [{ lat: (lo + hi) / 2, lon: null, radius: NaN, latHalf: (hi - lo) / 2, count: pts.length,
-          decl: null, dDays: null, dtMin: null, tight: false, src: 0 }];
+          decl: null, dDays: null, dtMin: null, tight: false, src: 0,
+          bias: L.biasFree ? cands[0].bias : null,
+          biasRange: L.biasFree ? [Math.min(...pts.map(q => q.bias)), Math.max(...pts.map(q => q.bias))] : null }];
       }
     }
 
