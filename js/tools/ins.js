@@ -9,7 +9,7 @@ import { offsetEN, distance } from '../lib/geo.js';
 import { createMap, posMarker, accuracyCircle, trackLine } from '../lib/map.js';
 import { declination, magToTrue } from '../lib/magdecl.js';
 import { load, save, remove } from '../lib/store.js';
-import { ASSUME, StepDetector, Strapdown, forwardHeading, headingFromEuler, alphaOffset, toENU, errorRadius, parseLatLon, parseDeg, wrap360 } from './ins/core.js';
+import { ASSUME, AccelBias, StepDetector, Strapdown, forwardHeading, headingFromEuler, alphaOffset, toENU, errorRadius, parseLatLon, parseDeg, wrap360 } from './ins/core.js';
 
 const CFG_KEY = 'ins:cfg';
 const RUN_KEY = 'ins:run';
@@ -80,8 +80,11 @@ export function mount(body, ctx) {
   const L = window.L;
 
   // ---------- Einstellungen und gespeicherter Lauf ----------
-  const cfg = Object.assign({ start: 'gps', method: 'steps', stepLen: 0.75, zupt: true, manPos: null, manHead: null, manPsi0: null, manE0: 0 }, load(CFG_KEY, {}));
+  const stored = load(CFG_KEY, null);
+  const cfg = Object.assign({ start: 'gps', method: 'strapdown', stepLen: 0.75, zupt: true, manPos: null, manHead: null, manPsi0: null, manE0: 0 }, stored, { v: 2 });
   const saveCfg = () => save(CFG_KEY, cfg);
+  // Einmalige Umstellung: früher war „Schritte“ voreingestellt, Standard ist jetzt Strapdown
+  if (stored && (stored.v || 1) < 2) { cfg.method = 'strapdown'; saveCfg(); }
   let run = load(RUN_KEY, null);
   let state = run && run.track && run.track.length ? 'ended' : 'idle';
   if (state === 'idle') run = null;
@@ -99,6 +102,8 @@ export function mount(body, ctx) {
   let lastMotionT = null, tickPrev = null;
   let motionCount = 0, relCount = 0, motionHz = 0, relHz = 0, rateT = performance.now();
   let noLinAcc = false, warnBg = false, linOk = 0, linNull = 0;
+  let calibHeading = null;
+  let bias = new AccelBias(), unCalib = null, calibTimer = null, calibT0 = 0;
   let follow = true, saveT = 0, hasLast = !!load(LAST_KEY, null);
 
   // ---------- Aufbau ----------
@@ -177,7 +182,7 @@ export function mount(body, ctx) {
     h('p.ins-note', 'Gerät beim Start in Gehrichtung halten: Oberkante zeigt in Bewegungsrichtung. Danach werden weder GPS noch Magnetkompass verwendet.')
   );
 
-  const segMethod = seg([{ value: 'steps', label: 'Schritte' }, { value: 'strapdown', label: 'Strapdown' }], cfg.method, v => {
+  const segMethod = seg([{ value: 'strapdown', label: 'Inertial' }, { value: 'steps', label: 'Schritte (Extra)' }], cfg.method, v => {
     cfg.method = v; saveCfg(); render();
   });
   const inStep = h('input.input', { type: 'text', inputmode: 'decimal', value: fmt(cfg.stepLen, 2) });
@@ -191,9 +196,11 @@ export function mount(body, ctx) {
   });
   const stepsPanel = h('div.ins-gap',
     h('div.field', h('label', 'Schrittlänge (m)'), inStep),
-    h('p.ins-note', 'Schritte werden aus dem Beschleunigungsbetrag erkannt; je Schritt wird die Position um die Schrittlänge im aktuellen Kurs fortgeschrieben.')
+    h('p.ins-note', 'Zusatzverfahren (Fußgänger-Koppelnavigation): Schritte werden aus dem Beschleunigungsbetrag erkannt; je Schritt wird die Position um die Schrittlänge im aktuellen Kurs fortgeschrieben. Driftet langsamer als Strapdown, setzt aber Gehen voraus.')
   );
+  const strapNote = h('p.ins-note', 'Strapdown: Beschleunigung ohne Schwerkraft wird mit der Gerätelage nach Ost/Nord gedreht und zweifach integriert. Beim Start 2 s Kalibrierung – Gerät ruhig halten; der gemessene Offset (Bias) wird danach abgezogen und bei Stillstand nachgeführt.');
   const strapPanel = h('div.ins-gap',
+    strapNote,
     h('div.field', h('label', 'Stillstandserkennung (ZUPT)'), segZupt),
     h('div.banner.warn', h('b', 'Driftet stark. '), 'Reine Doppelintegration der Smartphone-Beschleunigung: kleinste Messfehler wachsen mit t². Nur für kurze Zeiträume (Sekunden bis wenige Minuten) aussagekräftig.')
   );
@@ -388,10 +395,21 @@ export function mount(body, ctx) {
     stopGeo();
     stopCompass();       // ab hier kein Magnetkompass
 
+    // Strapdown: Bias-Kalibrierung in Ruhe (2 s)
+    bias = new AccelBias();
+    linOk = 0; linNull = 0;
+    if (cfg.method === 'strapdown') {
+      calibHeading = sp.heading;
+      const cal = await calibrate(2000);
+      if (!cal) return;
+      bias = cal;
+    }
+
     run = {
       v: 1, method: cfg.method, stepLen: cfg.stepLen, created: Date.now(), start: sp,
       E: 0, N: 0, dist: 0, steps: 0, tRun: 0, heading: sp.heading, err: sp.e0, speedNow: 0,
-      relSrc: !haveRel ? 'none' : r0.abs ? 'abs' : 'rel', track: [[sp.lat, sp.lon]]
+      relSrc: !haveRel ? 'none' : r0.abs ? 'abs' : 'rel',
+      bias: cfg.method === 'strapdown' ? { mag: bias.magnitude, spread: bias.spread, n: bias.n } : null, track: [[sp.lat, sp.lon]]
     };
     det = new StepDetector();
     sd = new Strapdown({ zupt: cfg.zupt });
@@ -403,6 +421,35 @@ export function mount(body, ctx) {
     state = 'running';
     persist(true);
     render();
+  }
+
+  /** Ruhephase aufnehmen; gibt AccelBias oder null (Abbruch, Hinweis per Toast). */
+  async function calibrate(ms) {
+    const cal = new AccelBias();
+    let nulls = 0;
+    state = 'calib'; calibT0 = performance.now();
+    render();
+    unCalib = watchMotion(e => {
+      const a = e.acceleration;
+      if (a && a.x != null) cal.add(a.x, a.y, a.z); else nulls++;
+    });
+    if (!unWake) unWake = await keepAwake();
+    await new Promise(res => { calibTimer = setTimeout(res, ms); });
+    calibTimer = null;
+    if (unCalib) { unCalib(); unCalib = null; }
+    if (state !== 'calib') return null;          // inzwischen verlassen/zurückgesetzt
+    let msg = '';
+    if (cal.n < 10) msg = nulls ? 'Keine Beschleunigung ohne Schwerkraft – Strapdown nicht möglich. „Schritte (Extra)“ verwenden.' : 'Keine Bewegungsdaten empfangen.';
+    else if (cal.spread > 0.3) msg = 'Gerät war nicht ruhig genug – ruhig halten und erneut starten.';
+    if (msg) {
+      if (unWake) { unWake(); unWake = null; }
+      state = 'idle';
+      syncSources();
+      toast(msg, 3200);
+      render();
+      return null;
+    }
+    return cal;
   }
 
   async function beginMotion() {
@@ -498,9 +545,11 @@ export function mount(body, ctx) {
       if (!a || a.x == null) { linNull++; noLinAcc = linOk === 0 && linNull > 30; return; }
       linOk++; noLinAcc = false;
       if (!rel || dt <= 0) return;
+      const [x, y, z] = bias.correct(a.x, a.y, a.z);
       const R = rotationMatrix(rel.alpha + (haveRel ? c : 0), rel.beta, rel.gamma);
-      const [aE, aN] = toENU(R, a.x, a.y, a.z);
-      sd.push(t, dt, aE, aN, Math.hypot(a.x, a.y, a.z));
+      const [aE, aN] = toENU(R, x, y, z);
+      sd.push(t, dt, aE, aN, Math.hypot(x, y, z));
+      if (sd.still) bias.adapt(a.x, a.y, a.z, dt);   // Bias im Stillstand nachführen
       run.E = sd.pE; run.N = sd.pN; run.dist = sd.dist; run.speedNow = sd.speed;
       addTrackPoint(0.5);
     }
@@ -524,6 +573,7 @@ export function mount(body, ctx) {
     return cfg.manPos;
   }
   function previewHeading() {
+    if (state === 'calib' && calibHeading != null) return calibHeading;
     if (cfg.start === 'manual') return cfg.manHead;
     const [lat, lon] = declRef();
     const ct = compassTrue(lat, lon);
@@ -574,12 +624,14 @@ export function mount(body, ctx) {
     const method = run ? run.method : cfg.method;
     stepsPanel.hidden = !idle || method !== 'steps';
     strapPanel.hidden = method !== 'strapdown';
+    strapNote.hidden = !idle;
     methodCard.hidden = !idle && method !== 'strapdown';
     segMethod.hidden = !idle;
     btnLast.hidden = !hasLast;
 
-    btnMain.textContent = { idle: 'Start', running: 'Stopp', paused: 'Fortsetzen', ended: 'Neue Messung' }[state];
-    btnReset.hidden = idle || state === 'ended';
+    btnMain.textContent = { idle: 'Start', calib: 'Kalibrieren …', running: 'Stopp', paused: 'Fortsetzen', ended: 'Neue Messung' }[state];
+    btnMain.disabled = state === 'calib';
+    btnReset.hidden = idle || state === 'ended' || state === 'calib';
 
     // Banner
     const banners = [];
@@ -652,7 +704,9 @@ export function mount(body, ctx) {
       if (lastTrackLen !== 0) { trackLayer.setLatLngs([]); lastTrackLen = 0; }
       placeMarkers(p, r0, hd, cfg.start === 'manual' ? p : null);
       if (cfg.start === 'manual' && map.hasLayer(posLayer)) map.removeLayer(posLayer);
-      status.hidden = true;
+      const left = Math.max(0, 2 - (performance.now() - calibT0) / 1000);
+      status.textContent = state === 'calib' ? `Gerät ruhig halten – Kalibrierung ${fmt(left, 1)} s` : '';
+      status.hidden = state !== 'calib';
       runList.hidden = true;
     }
   }
@@ -660,12 +714,13 @@ export function mount(body, ctx) {
   function renderRunList() {
     const s = run.start;
     const rows = [
-      ['Verfahren', run.method === 'steps' ? `Schritte à ${fmt(run.stepLen, 2)} m` : 'Strapdown' + (cfg.zupt ? ' + ZUPT' : '')],
+      ['Verfahren', run.method === 'steps' ? `Schritte à ${fmt(run.stepLen, 2)} m` : 'Inertial (Strapdown)' + (cfg.zupt ? ' + ZUPT' : '')],
+      run.bias && ['Bias (Start)', `${fmt(run.bias.mag, 3)} m/s² · Streuung ${fmt(run.bias.spread, 3)}`],
       ['Start', s.src === 'gps' ? `GPS ±${fmt(s.e0, 0)} m` : (s.e0 ? `manuell ±${fmt(s.e0, 0)} m` : 'manuell')],
       ['Startkurs', `${fmtDeg(s.heading)} rw` + (s.src === 'gps' ? ` (magn. ${fmtDeg(s.mag)}, Missw. ${fmtSigned(s.decl)})` : '') + ` ±${fmt(s.psi0, 0)}°`],
       ['Kursquelle', { rel: 'Lage relativ (Gyro)', abs: 'Lage (vom Browser absolut)', none: 'keine – Kurs konstant' }[run.relSrc] || '–']
     ];
-    runList.replaceChildren(...rows.map(([k, v]) => h('div.list-row', h('span.k', k), h('span.v.small', v))));
+    runList.replaceChildren(...rows.filter(Boolean).map(([k, v]) => h('div.list-row', h('span.k', k), h('span.v.small', v))));
     runList.hidden = false;
   }
 
@@ -708,6 +763,8 @@ export function mount(body, ctx) {
     if (state === 'running') endMotion();
     if (run) { save(RUN_KEY, run); }
     if (unWake) { unWake(); unWake = null; }
+    if (calibTimer) clearTimeout(calibTimer);
+    if (unCalib) { unCalib(); unCalib = null; }
     stopGeo(); stopCompass(); stopRel();
     if (unMotion) { unMotion(); unMotion = null; }
     map.remove();

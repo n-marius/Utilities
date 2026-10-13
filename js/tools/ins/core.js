@@ -144,6 +144,37 @@ export class Strapdown {
 }
 
 /**
+ * Bias der Linearbeschleunigung (Geräteachsen, m/s²): beim Start aus einer
+ * Ruhephase gemittelt und danach in erkannten Stillständen (ZUPT) langsam nachgeführt.
+ * MEMS-Beschleunigungsmesser haben Offsets von einigen 0,01 m/s²; unkorrigiert
+ * erzeugen sie nach 60 s bereits Dezimeter bis Meter Positionsfehler (0,5·b·t²).
+ */
+export class AccelBias {
+  constructor() { this.reset(); }
+  reset() { this.n = 0; this.sx = 0; this.sy = 0; this.sz = 0; this.s2 = 0; this.b = [0, 0, 0]; }
+  /** Kalibrierprobe aufnehmen. */
+  add(x, y, z) {
+    this.n++; this.sx += x; this.sy += y; this.sz += z; this.s2 += x * x + y * y + z * z;
+    this.b = [this.sx / this.n, this.sy / this.n, this.sz / this.n];
+  }
+  get mean() { return this.b; }
+  /** Streuung (m/s², RMS-Abstand vom Mittelwert) der Kalibrierproben. */
+  get spread() {
+    if (!this.n) return Infinity;
+    const [x, y, z] = this.b;
+    return Math.sqrt(Math.max(0, this.s2 / this.n - (x * x + y * y + z * z)));
+  }
+  get magnitude() { return Math.hypot(...this.b); }
+  /** Bias abziehen. */
+  correct(x, y, z) { return [x - this.b[0], y - this.b[1], z - this.b[2]]; }
+  /** Im Stillstand nachführen (Zeitkonstante tau in s). Rohwerte übergeben. */
+  adapt(x, y, z, dt, tau = 4) {
+    const k = dt / (tau + dt);
+    this.b = [this.b[0] + (x - this.b[0]) * k, this.b[1] + (y - this.b[1]) * k, this.b[2] + (z - this.b[2]) * k];
+  }
+}
+
+/**
  * Fehlerradius (m), grobe Schätzung.
  * Schritte:   e0 + 3 %·s + s·sin(ψ0 + Drift·t)
  * Strapdown:  e0 + 0,5·b·t² + s·sin(ψ0 + Drift·t)
