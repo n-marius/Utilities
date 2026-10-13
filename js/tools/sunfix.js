@@ -91,6 +91,13 @@ const deDateShort = iso => { const [, m, d] = iso.split('-'); return `${d}.${m}.
 const utcTime = d => `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
 const utcDate = d => `${pad(d.getUTCDate())}.${pad(d.getUTCMonth() + 1)}.`;
 
+/** Bezugsmeridian der Gerätezeitzone (Normalzeit, ohne Sommerzeit). */
+function stdTzLon(t) {
+  const y = new Date(t).getFullYear();
+  const off = Math.max(new Date(y, 0, 1).getTimezoneOffset(), new Date(y, 6, 1).getTimezoneOffset());
+  return -off / 4;
+}
+
 function fmtDM(v, pos, neg) {
   const a = Math.abs(v);
   let d = Math.floor(a), m = (a - d) * 60;
@@ -322,7 +329,7 @@ export function mount(body) {
     const year = new Date(tMid).getUTCFullYear();
     if (!declTable || declYear !== year) { declTable = makeDeclTable(declination, new Date(tMid)); declYear = year; }
     try {
-      result = solve(obs, { table: declTable, tzLon: -new Date(tMid).getTimezoneOffset() / 4 });
+      result = solve(obs, { table: declTable, tzLon: stdTzLon(tMid) });
       result.obs = obs;
     } catch (e) {
       console.error(e);

@@ -35,12 +35,12 @@ export function rowToObs(row) {
 }
 
 /**
- * Missweisungstabelle (10°-Raster, bilinear, winkelrichtig) aus einer Funktion fn(lat, lon, date).
- * Ohne fn: überall 0.
+ * Missweisungstabelle (10°-Raster, bikubisch nach Catmull-Rom, winkelrichtig) aus fn(lat, lon, date).
+ * Glatt (C1), damit der Ausgleich nicht an Rasterkanten hängen bleibt. Ohne fn: überall 0.
  */
 export function makeDeclTable(fn, date = new Date()) {
   if (!fn) return { at: () => 0, exact: () => 0 };
-  const NI = 19, NJ = 37;
+  const NI = 19, NJ = 36;
   const v = new Float64Array(NI * NJ);
   for (let i = 0; i < NI; i++) {
     for (let j = 0; j < NJ; j++) {
@@ -48,17 +48,23 @@ export function makeDeclTable(fn, date = new Date()) {
       v[i * NJ + j] = fn(lat, -180 + 10 * j, date) || 0;
     }
   }
+  const cr = (p0, p1, p2, p3, t) =>
+    p1 + 0.5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
   return {
     at(lat, lon) {
       const x = (Math.max(-90, Math.min(90, lat)) + 90) / 10;
       const y = (wrap180(lon) + 180) / 10;
-      const i = Math.min(NI - 2, Math.floor(x)), j = Math.min(NJ - 2, Math.floor(y));
+      const i = Math.min(NI - 2, Math.floor(x)), j = Math.floor(y) % NJ;
       const fx = x - i, fy = y - j;
-      const a = v[i * NJ + j];
-      const b = a + wrap180(v[i * NJ + j + 1] - a);
-      const c = a + wrap180(v[(i + 1) * NJ + j] - a);
-      const d = a + wrap180(v[(i + 1) * NJ + j + 1] - a);
-      return wrap180(a * (1 - fx) * (1 - fy) + b * (1 - fx) * fy + c * fx * (1 - fy) + d * fx * fy);
+      const ref = v[i * NJ + j];
+      const val = (ii, jj) => {
+        ii = Math.max(0, Math.min(NI - 1, ii));
+        jj = ((jj % NJ) + NJ) % NJ;
+        return ref + wrap180(v[ii * NJ + jj] - ref);
+      };
+      const col = [];
+      for (let a = -1; a <= 2; a++) col.push(cr(val(i + a, j - 1), val(i + a, j), val(i + a, j + 1), val(i + a, j + 2), fy));
+      return wrap180(cr(col[0], col[1], col[2], col[3], fx));
     },
     exact: (lat, lon) => fn(lat, lon, date) || 0
   };
