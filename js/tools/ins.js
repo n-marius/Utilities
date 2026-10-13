@@ -500,7 +500,7 @@ export function mount(body, ctx) {
       const p = curPos();
       if (p) { save(LAST_KEY, { lat: p[0], lon: p[1], err: run.err, t: Date.now() }); hasLast = true; }
     }
-    run = null; sd = null; haveRel = false; note = ''; warnBg = false;
+    run = null; sd = null; em = null; haveRel = false; note = ''; warnBg = false;
     remove(RUN_KEY);
     state = 'idle';
     stopRel();
@@ -535,6 +535,7 @@ export function mount(body, ctx) {
       const a = e.accelerationIncludingGravity && e.accelerationIncludingGravity.x != null ? e.accelerationIncludingGravity : e.acceleration;
       if (!a || a.x == null) return;
       const mag = Math.hypot(a.x, a.y, a.z);
+      if (em) em.update(dt, t - det.lastStep > 1.5, 0);   // Ruhe: seit 1,5 s kein Schritt
       if (det.push(t, mag)) {
         const hd = currentHeading();
         const L0 = run.stepLen;
