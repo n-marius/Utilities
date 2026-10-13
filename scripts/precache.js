@@ -4,13 +4,15 @@ const path = require('path');
 const crypto = require('crypto');
 
 const root = path.join(__dirname, '..');
+// Nur versionierte Dateien aufnehmen, damit halbfertige lokale Dateien den Offline-Cache nicht brechen.
+const tracked = new Set(require('child_process').execSync('git ls-files', { cwd: root }).toString().split('\n').filter(Boolean));
 const include = ['index.html', 'manifest.webmanifest', 'css', 'js', 'vendor', 'icons', 'data'];
 const files = [];
 function walk(rel) {
   const abs = path.join(root, rel);
   if (fs.statSync(abs).isDirectory()) {
     for (const f of fs.readdirSync(abs).sort()) if (!f.startsWith('.')) walk(path.posix.join(rel, f));
-  } else if (!/(\.map|LICENSE|\.md)$/.test(rel)) files.push(rel);
+  } else if (!/(\.map|LICENSE|\.md)$/.test(rel) && tracked.has(rel)) files.push(rel);
 }
 include.forEach(walk);
 
