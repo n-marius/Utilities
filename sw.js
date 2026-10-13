@@ -1,13 +1,14 @@
 // Service Worker: App offline verfügbar machen, Kartenkacheln zwischenspeichern.
 // ASSETS und VERSION werden von scripts/precache.js aktualisiert.
 
-const VERSION = '337290b8b2';
+const VERSION = 'a12e7b1334';
 const ASSETS = [
   './',
   'index.html',
   'manifest.webmanifest',
   'css/app.css',
   'js/app.js',
+  'js/lib/basemap.js',
   'js/lib/geo.js',
   'js/lib/magdecl.js',
   'js/lib/map.js',
@@ -32,7 +33,6 @@ const ASSETS = [
   'vendor/leaflet/images/marker-shadow.png',
   'vendor/leaflet/leaflet.css',
   'vendor/leaflet/leaflet.js',
-  'vendor/satellite.min.js',
   'icons/apple-touch-icon.png',
   'icons/icon-192.png',
   'icons/icon-512.png',
