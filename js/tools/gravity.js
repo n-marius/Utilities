@@ -213,6 +213,7 @@ export function mount(body, ctx) {
     if (!e) {
       for (const s of [sA, sStd, sG, sD, sAx, sN]) s.set('–');
       stats.hidden = true;
+      measNotes.hidden = true;
       return;
     }
     stats.hidden = false;
@@ -226,6 +227,7 @@ export function mount(body, ctx) {
     else if (cal.axis !== e.axis) measNotes.append(h('div.banner.warn', `Andere Lage als bei der Kalibrierung (${e.axis} statt ${cal.axis}). Skalenfehler sind achsabhängig.`));
     if (looksNormalized(e.a)) measNotes.append(h('div.banner.warn', 'Mittelwert liegt bei exakt 1 g (9,80665 m/s²) – die Plattform liefert vermutlich normierte Werte.'));
     if (e !== hist[0]) measNotes.append(h('div.gravity-note', 'Anzeige: Messung vom ' + fmtTime(e.t) + '.'));
+    measNotes.hidden = !measNotes.childElementCount;
   }
 
   let lines = [];
