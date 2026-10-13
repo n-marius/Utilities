@@ -32,8 +32,12 @@ export const TOOLS = [
     icon: `<svg viewBox="0 0 64 64" ${stroke}><circle cx="32" cy="32" r="23"/><ellipse cx="32" cy="32" rx="10" ry="23"/><path d="M9 32h46M13 20h38M13 44h38" stroke-width="2"/></svg>`
   },
   {
-    id: 'gravity', tab: 'lab', title: 'Gravitation', sub: 'Ortung über Erdschwere',
-    icon: `<svg viewBox="0 0 64 64" ${stroke}><circle cx="32" cy="15" r="7"/><path d="M32 27v19M25 40l7 7 7-7"/><path d="M12 54h40"/><path d="M16 59l4-5M26 59l4-5M36 59l4-5M46 59l4-5" stroke-width="1.8"/></svg>`
+    id: 'slope', tab: 'tools', title: 'Hangneigung', sub: 'Neigung · Lawinen-Check',
+    icon: `<svg viewBox="0 0 64 64" ${stroke}><path d="M8 52h48V18Z"/><path d="M25 52a17 17 0 0 0-2.6-9" stroke-width="2"/><path d="M50 52v-6h6" stroke-width="1.8"/></svg>`
+  },
+  {
+    id: 'resection', tab: 'lab', title: 'Kreuzpeilung', sub: 'Ort über Kompasspeilungen',
+    icon: `<svg viewBox="0 0 64 64" ${stroke}><path d="M14 16 34 38M52 22 34 38M34 58V38" stroke-width="2" stroke-dasharray="3 4"/><path d="M14 9l5.5 9h-11zM52 15l5.5 9h-11zM34 51l5.5 9h-11z" fill="currentColor" stroke="none"/><circle cx="34" cy="38" r="5"/></svg>`
   }
 ];
 

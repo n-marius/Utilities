@@ -1,7 +1,7 @@
 // Service Worker: App offline verfügbar machen, Kartenkacheln zwischenspeichern.
 // ASSETS und VERSION werden von scripts/precache.js aktualisiert.
 
-const VERSION = '89b9213dc0';
+const VERSION = 'c3e51c9679';
 const ASSETS = [
   './',
   'index.html',
@@ -24,8 +24,6 @@ const ASSETS = [
   'js/tools/coords/convert.js',
   'js/tools/coords/w3w.js',
   'js/tools/coords.js',
-  'js/tools/gravity/model.js',
-  'js/tools/gravity.js',
   'js/tools/ins/core.js',
   'js/tools/ins.js',
   'js/tools/resection/solve.js',
@@ -47,8 +45,7 @@ const ASSETS = [
   'icons/icon-512.png',
   'icons/icon.svg',
   'icons/maskable-512.png',
-  'data/basemap.json',
-  'data/gravity-anomaly.bin'
+  'data/basemap.json'
 ];
 
 const APP_CACHE = 'utilities-app-' + VERSION;
