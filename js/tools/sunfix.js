@@ -38,6 +38,8 @@ const STYLE = `
 .sunfix-pos { grid-column: 1 / -1; cursor: pointer; }
 .sunfix-pos .v { font-size: 19px; }
 .sunfix-dm { font-size: 13px; color: var(--text-2); font-variant-numeric: tabular-nums; margin-top: 1px; }
+.sunfix-num { background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: 10px;
+  font: 600 12px/18px var(--font); text-align: center; }
 .sunfix-notes { display: flex; flex-direction: column; gap: 4px; }
 .sunfix-set { display: grid; grid-template-columns: 46px 1fr; align-items: center; gap: 10px 10px; }
 .sunfix-set > label { font-size: 14px; color: var(--text-2); }
@@ -91,13 +93,6 @@ const deDateShort = iso => { const [, m, d] = iso.split('-'); return `${d}.${m}.
 const utcTime = d => `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
 const utcDate = d => `${pad(d.getUTCDate())}.${pad(d.getUTCMonth() + 1)}.`;
 
-/** Bezugsmeridian der Gerätezeitzone (Normalzeit, ohne Sommerzeit). */
-function stdTzLon(t) {
-  const y = new Date(t).getFullYear();
-  const off = Math.max(new Date(y, 0, 1).getTimezoneOffset(), new Date(y, 6, 1).getTimezoneOffset());
-  return -off / 4;
-}
-
 function fmtDM(v, pos, neg) {
   const a = Math.abs(v);
   let d = Math.floor(a), m = (a - d) * 60;
@@ -125,22 +120,7 @@ export function mount(body) {
   const chip = h('div.sunfix-chip', { hidden: true });
   mapEl.append(chip);
 
-  const sPos = stat('Position');
-  sPos.el.classList.add('sunfix-pos');
-  const dmLine = h('div.sunfix-dm');
-  sPos.el.append(dmLine);
-  sPos.el.addEventListener('click', () => {
-    if (!result || !result.ok) return;
-    const c = center();
-    if (!result.lonKnown) copyText(c.lat.toFixed(4), 'Breite kopiert');
-    else copyText(`${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}`, 'Koordinaten kopiert');
-  });
-  const sRad = stat('Radius 95 %');
-  const sN = stat('Messungen');
-  const sDecl = stat('Missweisung');
-  const sExtra1 = stat('–'), sExtra2 = stat('–');
-  sExtra1.el.hidden = sExtra2.el.hidden = true;
-  const stats = h('div.stats', sPos.el, sRad.el, sN.el, sDecl.el, sExtra1.el, sExtra2.el);
+  const stats = h('div.stats');
   const progress = h('div.progress', { hidden: true }, h('i'));
   const notesEl = h('div.sunfix-notes');
 
@@ -175,9 +155,12 @@ export function mount(body) {
   const sensorBanner = h('div.banner.warn', { hidden: true });
 
   const foot = h('p.sunfix-foot',
-    'Fehlergrenzen je Messung: Höhe ±(0,5° + Sensor), Azimut ±(0,5° + Sensor). Sensoranteil: doppelte Streuung der letzten Sekunde vor der Erfassung ',
-    'plus 0,5° (Neigung) bzw. Kompassgenauigkeit (iOS) oder 5°. Azimut magnetisch gemessen; Missweisung nach WMM2025 an der geschätzten Position. ',
-    `Kreis: 95 % von ${MC_RUNS} Monte-Carlo-Lösungen mit gestörten Messwerten. Höhe mit Refraktion (Normalatmosphäre) korrigiert.`);
+    'Fehlergrenze je Messung: Höhe ±(0,5° + Sensor), Azimut ±(0,5° + Sensor). ',
+    'Sensor-Anteil Höhe: doppelte Standardabweichung der Werte in der letzten Sekunde vor der Erfassung + 0,5° Grundannahme Neigungssensor. ',
+    'Sensor-Anteil Azimut: doppelte Standardabweichung + Kompassgenauigkeit des Geräts (iOS) bzw. 5° Grundannahme. ',
+    'Azimut wird magnetisch gemessen; Missweisung nach WMM2025 an der jeweiligen Lösung. Höhe mit Refraktion (Normalatmosphäre) korrigiert. ',
+    `Kreis: 95 % von ${MC_RUNS} Monte-Carlo-Lösungen, Messwerte gleichverteilt innerhalb dieser Fehlergrenzen gestört, je Lösung ausgewertet. `,
+    'Lösungen, deren Güte sich statistisch nicht unterscheidet (Δχ² < 4), werden alle gleichrangig angezeigt.');
 
   const parts = [mapEl, stats, progress, notesEl, h('div.section-title', 'Messungen'),
     setCard, sensorBanner, bar, tableCard, editCard, foot];
@@ -239,7 +222,7 @@ export function mount(body) {
 
   function renderTable() {
     tbody.textContent = '';
-    const decl = result && result.ok ? result.decl : null;
+    const decl = result && result.ok && result.solutions.length === 1 ? result.decl : null;
     if (!rows.length) {
       tbody.append(h('tr.sunfix-empty', h('td', { colSpan: 7 }, 'Noch keine Messungen. Mit + messen.')));
     }
@@ -315,11 +298,6 @@ export function mount(body) {
     recalcTimer = setTimeout(recalc, 250);
   }
 
-  function center() {
-    if (result && result.underdetermined && mcRes) return mcRes.center;
-    return { lat: result.lat, lon: result.lon };
-  }
-
   async function recalc() {
     const my = ++token;
     mcRes = null;
@@ -329,7 +307,7 @@ export function mount(body) {
     const year = new Date(tMid).getUTCFullYear();
     if (!declTable || declYear !== year) { declTable = makeDeclTable(declination, new Date(tMid)); declYear = year; }
     try {
-      result = solve(obs, { table: declTable, tzLon: stdTzLon(tMid) });
+      result = solve(obs, { table: declTable });
       result.obs = obs;
     } catch (e) {
       console.error(e);
@@ -351,86 +329,118 @@ export function mount(body) {
     renderResult();
   }
 
+  /** Kennzahl-Kachel (ui.stat) mit optionalen Zusatzzeilen. */
+  function tile(label, value, unit = '', wide = false, ...lines) {
+    const t = stat(label, value, unit);
+    if (wide) t.el.classList.add('sunfix-wide');
+    for (const l of lines) if (l) t.el.append(h('div.sunfix-dm', l));
+    return t.el;
+  }
+
   function renderResult() {
     layer.clearLayers();
     chip.hidden = true;
-    sExtra1.el.hidden = sExtra2.el.hidden = true;
     notesEl.textContent = '';
+    stats.textContent = '';
     if (!result || !result.ok) {
       progress.hidden = true;
-      sPos.set('–'); dmLine.textContent = rows.length ? (result && result.reason) || '' : 'Noch keine Messung';
-      sRad.set('–'); sN.set(String(rows.length)); sDecl.set('–');
-      layoutStats();
+      stats.append(
+        tile('Position', '–', '', true, rows.length ? (result && result.reason) || '' : 'Noch keine Messung'),
+        tile('Radius 95 %', '–'), tile('Messungen', String(rows.length)));
       return;
     }
     const r = result;
-    const c = center();
-    sN.set(String(r.nObs));
-    sDecl.el.querySelector('.k').textContent = r.lonKnown ? 'Missweisung' : 'Missweisung (geschätzt)';
-    sDecl.set(fmtDecl(r.decl));
-    const extras = [];
-    if (r.dDays != null) {
-      const o = r.obs.find(x => !x.hasDate);
-      const d = new Date(o.t + r.dDays * DAY);
-      extras.push(['Datum (berechnet)', `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.`]);
-    }
-    if (r.dtMin != null) extras.push(['Uhrkorrektur', `${r.dtMin >= 0 ? '+' : '−'}${fmt(Math.abs(r.dtMin), 0)}`, 'min']);
-    [sExtra1, sExtra2].forEach((s, i) => {
-      if (!extras[i]) return;
-      s.el.hidden = false;
-      s.el.querySelector('.k').textContent = extras[i][0];
-      s.set(extras[i][1], extras[i][2] || '');
+    const multi = r.solutions.length > 1;
+    // gleichwertige Lösungen mit eigener Streuung (Cluster des Monte Carlo)
+    const sols = r.solutions.map((s, i) => {
+      const c = mcRes && mcRes.per[i];
+      return { ...s, lat: c ? c.lat : s.lat, lon: c ? c.lon : s.lon, radius: c ? c.radius : NaN, latHalf: c ? c.latHalf : NaN };
     });
-    layoutStats();
+    const dateOf = s => {
+      if (s.dDays == null) return null;
+      const o = r.obs.find(x => !x.hasDate);
+      const d = new Date(o.t + s.dDays * DAY);
+      return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.`;
+    };
+    const dtOf = s => s.dtMin == null ? null : `${s.dtMin >= 0 ? '+' : '−'}${fmt(Math.abs(s.dtMin), 0)} min`;
+    const radOf = s => !mcRes ? '…' : r.lonKnown
+      ? (Number.isFinite(s.radius) ? fmtDist(s.radius) : '–')
+      : (Number.isFinite(s.latHalf) ? `± ${fmt(s.latHalf, s.latHalf < 10 ? 2 : 1)}°` : '–');
+    const declLabel = r.lonKnown ? 'Missweisung' : 'Missweisung (geschätzt)';
+    const posText = s => r.lonKnown
+      ? `${fmt(Math.abs(s.lat), 3)}° ${s.lat >= 0 ? 'N' : 'S'}  ${fmt(Math.abs(s.lon), 3)}° ${s.lon >= 0 ? 'O' : 'W'}`
+      : `${fmt(Math.abs(s.lat), 2)}° ${s.lat >= 0 ? 'N' : 'S'}`;
+    const dmText = s => r.lonKnown ? `${fmtDM(s.lat, 'N', 'S')}  ${fmtDM(s.lon, 'O', 'W')}` : `${fmtDM(s.lat, 'N', 'S')} · Länge unbestimmt`;
+    const copy = s => r.lonKnown
+      ? copyText(`${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}`, 'Koordinaten kopiert')
+      : copyText(s.lat.toFixed(4), 'Breite kopiert');
 
-    const bounds = [];
-    sRad.el.querySelector('.k').textContent = r.lonKnown ? 'Radius 95 %' : 'Breite ±95 %';
-    if (r.lonKnown) {
-      sPos.set(`${fmt(Math.abs(c.lat), 3)}° ${c.lat >= 0 ? 'N' : 'S'}  ${fmt(Math.abs(c.lon), 3)}° ${c.lon >= 0 ? 'O' : 'W'}`);
-      dmLine.textContent = `${fmtDM(c.lat, 'N', 'S')}  ${fmtDM(c.lon, 'O', 'W')}`;
-      if (mcRes && Number.isFinite(mcRes.radius)) {
-        sRad.set(fmtDist(mcRes.radius));
-        const circ = accuracyCircle([c.lat, c.lon], Math.max(mcRes.radius, 2000)).addTo(layer);
-        bounds.push(circ);
-        r.alternatives.forEach((a, i) => {
-          const rad = mcRes.alts[i] && Number.isFinite(mcRes.alts[i].radius) ? mcRes.alts[i].radius : mcRes.radius;
-          bounds.push(accuracyCircle([a.lat, a.lon], Math.max(rad, 2000), 'u-alt').addTo(layer));
-        });
-      } else {
-        sRad.set('…');
-        r.alternatives.forEach(a => posMarkerAlt(a.lat, a.lon));
-      }
-      const m = posMarker([c.lat, c.lon]).addTo(layer);
-      if (!bounds.length) bounds.push(m);
+    sols.forEach((s, i) => {
+      const details = multi ? [
+        `${r.lonKnown ? 'Radius 95 %' : 'Breite ±95 %'} ${radOf(s)} · ${declLabel} ${fmtDecl(s.decl)}`,
+        [dateOf(s) && `Datum (berechnet) ${dateOf(s)}`, dtOf(s) && `Uhrkorrektur ${dtOf(s)}`].filter(Boolean).join(' · ')
+      ] : [];
+      const el = tile(multi ? `Lösung ${i + 1}` : 'Position', posText(s), '', true, dmText(s), ...details);
+      el.classList.add('sunfix-pos');
+      el.addEventListener('click', () => copy(s));
+      stats.append(el);
+    });
+    const tiles = [];
+    if (multi) {
+      tiles.push(tile('Lösungen', String(sols.length)), tile('Messungen', String(r.nObs)));
     } else {
-      sPos.set(`${fmt(Math.abs(c.lat), 2)}° ${c.lat >= 0 ? 'N' : 'S'}`);
-      dmLine.textContent = `${fmtDM(c.lat, 'N', 'S')} · Länge unbestimmt`;
+      const s = sols[0];
+      tiles.push(tile(r.lonKnown ? 'Radius 95 %' : 'Breite ±95 %', radOf(s), '', false),
+        tile('Messungen', String(r.nObs)), tile(declLabel, fmtDecl(s.decl)));
+      if (dateOf(s)) tiles.push(tile('Datum (berechnet)', dateOf(s)));
+      if (dtOf(s)) tiles.push(tile('Uhrkorrektur', dtOf(s)));
+      if (!r.lonKnown && mcRes && Number.isFinite(s.latHalf)) tiles[0].querySelector('.v').append(h('small', `≈ ${fmt(s.latHalf * 111.195, 0)} km`));
+    }
+    if (tiles.length % 2) tiles[tiles.length - 1].classList.add('sunfix-wide');
+    stats.append(...tiles);
+
+    // Karte: jede gleichwertige Lösung mit eigenem Punkt und eigenem 95-%-Bereich
+    const bounds = [];
+    const label = (s, i) => {
+      if (!multi) return;
+      L.marker([s.lat, r.lonKnown ? s.lon : mapApi.map.getCenter().lng], {
+        icon: L.divIcon({ className: 'sunfix-num', html: String(i + 1), iconSize: [20, 20], iconAnchor: [-6, 24] }),
+        interactive: false, keyboard: false
+      }).addTo(layer);
+    };
+    if (r.lonKnown) {
+      sols.forEach((s, i) => {
+        if (mcRes && Number.isFinite(s.radius)) bounds.push(accuracyCircle([s.lat, s.lon], Math.max(s.radius, 2000)).addTo(layer));
+        const m = posMarker([s.lat, s.lon]).addTo(layer);
+        if (!mcRes) bounds.push(m);
+        label(s, i);
+      });
+    } else {
       chip.textContent = 'Länge unbestimmt (keine Uhrzeit)';
       chip.hidden = false;
-      const band = (lat, half, cls) => L.rectangle(
-        [[Math.max(-85, lat - half), -180], [Math.min(85, lat + half), 180]],
-        { className: cls, interactive: false }).addTo(layer);
-      if (mcRes && Number.isFinite(mcRes.latHalf)) {
-        sRad.set(`± ${fmt(mcRes.latHalf, mcRes.latHalf < 10 ? 2 : 1)}°`, `≈ ${fmtDist(mcRes.latHalf * 111195)}`);
-        bounds.push(band(c.lat, Math.max(mcRes.latHalf, 0.05), 'u-alt'));
-        r.alternatives.forEach((a, i) => band(a.lat, (mcRes.alts[i] && mcRes.alts[i].latHalf) || mcRes.latHalf, 'u-alt'));
-      } else {
-        sRad.set('…');
-      }
-      L.polyline([[c.lat, -180], [c.lat, 180]], { className: 'u-track', interactive: false }).addTo(layer);
-      // großer Ausschnitt um den Zeitzonenmeridian, Band gut sichtbar
-      const half = mcRes && Number.isFinite(mcRes.latHalf) ? mcRes.latHalf : 2;
-      const span = Math.min(80, Math.max(6, half * 3));
-      const lon0 = stdTzLon(Date.now());
-      bounds.length = 0;
-      bounds.push(L.rectangle([[Math.max(-85, c.lat - span), lon0 - 2 * span], [Math.min(85, c.lat + span), lon0 + 2 * span]], { interactive: false }));
+      let lo = 90, hi = -90;
+      sols.forEach((s, i) => {
+        const half = Number.isFinite(s.latHalf) ? Math.max(s.latHalf, 0.05) : 0;
+        if (mcRes && half) {
+          L.rectangle([[Math.max(-85, s.lat - half), -180], [Math.min(85, s.lat + half), 180]],
+            { className: 'u-acc', interactive: false }).addTo(layer);
+        }
+        L.polyline([[s.lat, -180], [s.lat, 180]], { className: 'u-track', interactive: false }).addTo(layer);
+        label(s, i);
+        lo = Math.min(lo, s.lat - Math.max(half * 1.5, 4));
+        hi = Math.max(hi, s.lat + Math.max(half * 1.5, 4));
+      });
+      // großer Ausschnitt um die aktuelle Kartenmitte, alle Bänder sichtbar
+      const lon0 = mapApi.map.getCenter().lng;
+      const span = Math.min(170, Math.max(12, hi - lo));
+      bounds.push(L.rectangle([[Math.max(-85, lo), lon0 - span], [Math.min(85, hi), lon0 + span]], { interactive: false }));
     }
 
-    const notes = r.notes.filter(n => !(n.startsWith('Länge unbestimmt')));
-    if (mcRes && r.lonKnown && mcRes.radius > 3000000) notes.unshift('Unsicherheit sehr groß – Ergebnis kaum aussagekräftig');
-    if (!r.lonKnown) notes.unshift('Ohne Uhrzeit ist die Länge nicht bestimmbar (Erdrotation und Uhrfehler sind ununterscheidbar). Angezeigt ist das Breitenband.');
+    const notes = r.notes.slice();
+    if (mcRes && r.lonKnown && sols.some(s => s.radius > 3000000)) notes.unshift('Unsicherheit sehr groß – Ergebnis kaum aussagekräftig');
     if (r.underdetermined && mcRes) notes.push('Angezeigt: Mittelpunkt der möglichen Lösungen');
-    for (const n of notes) notesEl.append(h('div.banner' + (/unbestimmt|Unterbestimmt|schlecht|groß|Mehrdeutig/.test(n) ? '.warn' : ''), n));
+    if (mcRes && mcRes.per.some(c => c.sparse)) notes.push('Für mindestens eine Lösung zu wenige Monte-Carlo-Treffer – Radius vorsichtig übernommen');
+    for (const n of notes) notesEl.append(h('div.banner' + (/nicht bestimmbar|Unterbestimmt|schlecht|groß|Mehrdeutig|wenige/.test(n) ? '.warn' : ''), n));
 
     if (bounds.length) {
       const fg = L.featureGroup(bounds);
@@ -439,16 +449,6 @@ export function mount(body) {
         if (b.isValid()) mapApi.map.fitBounds(b, { padding: [24, 24], maxZoom: 9, animate: false });
       } catch { /* leer */ }
     }
-  }
-
-  /** Ungerade Kachelzahl: letzte Kachel über die volle Breite. */
-  function layoutStats() {
-    const vis = [sRad, sN, sDecl, sExtra1, sExtra2].filter(s => !s.el.hidden);
-    vis.forEach((s, i) => s.el.classList.toggle('sunfix-wide', vis.length % 2 === 1 && i === vis.length - 1));
-  }
-
-  function posMarkerAlt(lat, lon) {
-    L.circleMarker([lat, lon], { radius: 6, className: 'u-alt', interactive: false }).addTo(layer);
   }
 
   // ---------- Messung ----------
@@ -567,6 +567,7 @@ export function mount(body) {
       date: set.dateMode === 'empty' ? null : localDate(e),
       time: set.timeMode === 'empty' ? null : localTime(e),
       h: alt, az, sh, sZ,
+      // Fehlergrenzen exakt 0,5° (Ausrichtung) + Sensor; so gehen sie in Ausgleich (Normierung) und Monte Carlo (±eh/±eZ) ein
       eh: AIM + sh, eZ: AIM + sZ,
       n: win.length, src: withAz[withAz.length - 1].src
     };

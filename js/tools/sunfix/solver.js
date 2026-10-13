@@ -334,7 +334,8 @@ function describe(sol, data, L) {
 /**
  * Hauptlösung (+ Alternativen) bestimmen.
  * obs: [{t, hasDate, hasTime, h (scheinbar), az (magnetisch), eh, eZ}]
- * opts: {table: makeDeclTable(...), tzLon: Bezugsmeridian der Gerätezeitzone (nur zur Auswahl bei Mehrdeutigkeit)}
+ * opts: {table: makeDeclTable(...)}
+ * Ergebnis: Felder der besten Lösung plus solutions:[…] (alle gleichwertigen, gleichrangig).
  */
 export function solve(obs, opts = {}) {
   if (!obs.length) return { ok: false, reason: 'Keine Messungen' };
@@ -358,100 +359,101 @@ export function solve(obs, opts = {}) {
 
   const nEq = data.length * 2 + (L.mFree ? 1 : 0);
   const under = nEq < L.n;
-  let all = uniq.map(s => describe(s, data, L));
-  const best = all[0];
-  const fits = d => d.rms <= Math.max(1.2, best.rms * 1.5 + 0.3);
-  let byTz = false;
-  if (!under && L.lonKnown && Number.isFinite(opts.tzLon)) {
-    // Gleich gute Lösungen (z. B. durch die ortsabhängige Missweisung): die zur Zeitzone passende bevorzugen
-    const good = all.filter(fits);
-    const tzd = d => Math.abs(wrap180(d.lon - opts.tzLon));
-    const pick = good.reduce((a, b) => (tzd(b) < tzd(a) ? b : a), best);
-    if (pick !== best) { byTz = true; all = [pick, ...all.filter(d => d !== pick)]; }
-  }
-  const main = all[0];
-  const alternatives = under ? [] : all.slice(1).filter(fits).slice(0, 3);
+  // Gleichwertigkeit: Residuen sind auf die Fehlergrenze e normiert; e wird als ≈ 2σ gewertet,
+  // also χ² = 4·Σr². Lösungen mit Δχ² < 4 (≈ 95-%-Kriterium) sind statistisch nicht unterscheidbar
+  // und werden gleichrangig ausgegeben – ohne Bevorzugung nach Plausibilität oder Zeitzone.
+  // Unterbestimmt: Lösungsmenge ist ein Kontinuum, dann nur ein Vertreter (Streuung zeigt der Monte Carlo).
+  const chi2 = d => 4 * d.cost;
+  const all = uniq.map(s => ({ ...describe(s, data, L), cost: s.cost }));
+  const best = chi2(all[0]);
+  const solutions = (under ? all.slice(0, 1) : all.filter(d => chi2(d) - best < 4)).slice(0, 6);
   const notes = [];
-  if (!L.lonKnown) notes.push('Länge unbestimmt (keine Uhrzeit)');
+  if (!L.lonKnown) notes.push('Ohne absolute Uhrzeit ist die Länge nicht bestimmbar – auch nicht aus mehreren Messungen mit bekannten Zeitabständen, da eine Zeitverschiebung exakt einer Längenverschiebung entspricht.');
   if (L.mFree) notes.push('Missweisung unbekannt (Länge fehlt) – aus Messung geschätzt');
   if (under) notes.push(L.dFree ? 'Unterbestimmt: ohne Datum mehrere Messungen über einige Stunden nötig' : 'Unterbestimmt: weitere Messungen nötig');
   else if (L.dFree && data.length < 3) notes.push('Ohne Datum: Ergebnis schwach bestimmt – mehr Messungen über einige Stunden verbessern es');
-  if (main.rms > 1.5) notes.push('Messungen passen schlecht zusammen (Residuen über den Fehlergrenzen)');
-  if (alternatives.length) notes.push('Mehrdeutig: ' + (alternatives.length === 1 ? 'eine weitere Lösung' : alternatives.length + ' weitere Lösungen') + ' möglich (gestrichelt)' + (byTz ? '; Auswahl nach Zeitzone des Geräts' : ''));
-  return { ok: true, ...main, lonKnown: L.lonKnown, layout: L, underdetermined: under, nObs: data.length, alternatives, notes };
+  if (solutions[0].rms > 1.5) notes.push('Messungen passen schlecht zusammen (Residuen über den Fehlergrenzen)');
+  if (solutions.length > 1) notes.push(`Mehrdeutig: ${solutions.length} gleichwertige Lösungen`);
+  return { ok: true, ...solutions[0], solutions, lonKnown: L.lonKnown, layout: L, underdetermined: under, nObs: data.length, notes };
 }
 
 // ---------- Monte Carlo ----------
 
 /**
- * Streuung der Lösung durch gleichverteilte Störung der Messwerte innerhalb ±eh/±eZ.
- * Nuisance-Parameter werden zufällig initialisiert. Läuft in Häppchen (setTimeout).
- * Ergebnis: {radius (m), latHalf (Grad), alts:[{radius, latHalf}], center:{lat, lon}, runs, used}
+ * Streuung durch gleichverteilte Störung der Messwerte innerhalb ±eh/±eZ – das sind je Zeile genau
+ * die Fehlergrenzen ±(0,5° + Sensor). Nuisance-Parameter werden zufällig initialisiert, Startpunkte
+ * reihum aus allen gleichwertigen Lösungen. Die Punktwolke wird je Lösung geclustert (nächster
+ * Lösungspunkt); Radius je Lösung = 95-%-Quantil der Abstände im eigenen Cluster. Läuft in Häppchen.
+ * Ergebnis: {per:[{lat, lon, radius (m), latHalf (Grad), count}], runs, used, points}
  */
 export function monteCarlo(obs, sol, opts = {}) {
   const runs = opts.runs ?? 200, chunk = opts.chunk ?? 10;
   const rng = opts.rng || Math.random;
   const data = prep(obs);
   const L = sol.layout;
-  const table = sol.ctx.table;
-  const centers = [sol, ...sol.alternatives];
+  const sols = sol.solutions;
   const pts = [];
   const lim = Math.max(2, 2 * sol.rms + 0.5);
   const U = () => 2 * rng() - 1;
+  const rmsOf = (p, d, ctx) => Math.sqrt(ssq(residuals(p, d, L, ctx).slice(0, d.length * 2)) / (d.length * 2));
+  let k = 0;
 
   function oneRun() {
     const pert = data.map(o => {
       const h = o.h + U() * o.eh;
       return { ...o, h, hTrue: apparentToTrue(h), az: o.az + U() * o.eZ };
     });
-    const ctx = { ...sol.ctx };
-    const p = sol.p.slice();
+    const s0 = sols[k++ % sols.length];
+    const ctx = { ...s0.ctx };
+    const p = s0.p.slice();
     if (L.dFree) p[L.iD] = U() * YEAR / 2;
     if (L.dtFree) p[L.iDt] = U() * 12;
     if (L.mFree) {
       // Missweisung an zufälliger Länge auf der geschätzten Breite
-      ctx.m0 = table.at(sol.lat, U() * 180);
+      ctx.m0 = ctx.table.at(s0.lat, U() * 180);
       ctx.sm = 1;
       p[L.iM] = ctx.m0;
     }
     let r = lm(p, pert, L, ctx);
-    let ok = Math.sqrt(ssq(residuals(r.p, pert, L, ctx).slice(0, pert.length * 2)) / (pert.length * 2)) <= lim;
+    let ok = rmsOf(r.p, pert, ctx) <= lim;
     if (!ok) {
-      const q = sol.p.slice();
+      const q = s0.p.slice();
       if (L.mFree) q[L.iM] = ctx.m0;
       r = lm(q, pert, L, ctx);
-      ok = Math.sqrt(ssq(residuals(r.p, pert, L, ctx).slice(0, pert.length * 2)) / (pert.length * 2)) <= lim;
+      ok = rmsOf(r.p, pert, ctx) <= lim;
     }
     if (ok) pts.push({ lat: r.p[0], lon: r.p[1] });
   }
 
   function summarize() {
-    const lonOf = c => L.lonKnown ? c.lon : 0;
-    let center = { lat: sol.lat, lon: lonOf(sol) };
+    const dist = (a, b) => L.lonKnown ? distance(a.lat, a.lon, b.lat, b.lon) : Math.abs(a.lat - b.lat) * 111195;
+    let cs = sols.map(c => ({ lat: c.lat, lon: L.lonKnown ? c.lon : 0 }));
     if (sol.underdetermined && pts.length > 4) {
       // unterbestimmt: Medoid der Punktwolke als Mittelpunkt
       let best = Infinity;
       for (const a of pts) {
         let s = 0;
-        for (const b of pts) s += L.lonKnown ? distance(a.lat, a.lon, b.lat, b.lon) : Math.abs(a.lat - b.lat);
-        if (s < best) { best = s; center = { lat: a.lat, lon: L.lonKnown ? a.lon : 0 }; }
+        for (const b of pts) s += dist(a, b);
+        if (s < best) { best = s; cs = [{ lat: a.lat, lon: L.lonKnown ? a.lon : 0 }]; }
       }
     }
-    const cs = centers.map((c, i) => (i === 0 ? center : { lat: c.lat, lon: lonOf(c) }));
     const groups = cs.map(() => []);
     for (const q of pts) {
       let bi = 0, bd = Infinity;
-      cs.forEach((c, i) => {
-        const d = L.lonKnown ? distance(q.lat, q.lon, c.lat, c.lon) : Math.abs(q.lat - c.lat) * 111195;
-        if (d < bd) { bd = d; bi = i; }
-      });
-      groups[bi].push({ d: L.lonKnown ? distance(q.lat, q.lon, cs[bi].lat, cs[bi].lon) : NaN, dl: Math.abs(q.lat - cs[bi].lat) });
+      cs.forEach((c, i) => { const d = dist(q, c); if (d < bd) { bd = d; bi = i; } });
+      groups[bi].push({ d: bd, dl: Math.abs(q.lat - cs[bi].lat) });
     }
     const q95 = arr => { if (!arr.length) return NaN; const s = arr.slice().sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(0.95 * s.length))]; };
-    const stats = groups.map(g => ({ radius: q95(g.map(x => x.d)), latHalf: q95(g.map(x => x.dl)), count: g.length }));
-    const main = stats[0];
-    for (const s of stats.slice(1)) if (s.count < 5) { s.radius = main.radius; s.latHalf = main.latHalf; }
-    return { radius: main.radius, latHalf: main.latHalf, center, alts: stats.slice(1), runs, used: pts.length, points: pts };
+    const per = groups.map((g, i) => ({ ...cs[i], radius: L.lonKnown ? q95(g.map(x => x.d)) : NaN, latHalf: q95(g.map(x => x.dl)), count: g.length }));
+    // dünn besetzte Cluster: größten Radius gut besetzter Cluster übernehmen (vorsichtig)
+    const full = per.filter(c => c.count >= 5);
+    for (const c of per) {
+      if (c.count >= 5 || !full.length) continue;
+      c.radius = Math.max(...full.map(x => x.radius));
+      c.latHalf = Math.max(...full.map(x => x.latHalf));
+      c.sparse = true;
+    }
+    return { per, runs, used: pts.length, points: pts };
   }
 
   return new Promise(resolve => {
