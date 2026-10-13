@@ -43,6 +43,7 @@ const STYLE = `
 .gravity-hin span { color: var(--text-2); font-size: 14px; }
 .gravity-card { display: flex; flex-direction: column; gap: 12px; }
 .gravity-card .card-title { margin: 0; }
+.gravity-hrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-2); font-size: 14px; }
 .gravity-notes { display: flex; flex-direction: column; gap: 8px; }
 .gravity-note { font-size: 12.5px; color: var(--text-2); line-height: 1.45; }
 .gravity-foot { font-size: 12px; color: var(--text-2); line-height: 1.45; padding: 0 4px; }
@@ -97,22 +98,21 @@ export function mount(body, ctx) {
   const calAltIn = h('input.input', { type: 'text', inputmode: 'decimal', onchange: onCalAlt });
   const calRows = h('div.list.gravity-rows');
   const calNotes = h('div.gravity-notes');
-  const calCard = h('div.card.gravity-card', h('div.card-title', 'Kalibrierung'), calRows, calNotes, calBtn);
 
   // Messung
-  const measBtn = h('button.btn.primary.block', { type: 'button', onclick: startMeasurement }, 'Messen (60 s)');
+  const measBtn = h('button.btn.primary', { type: 'button', onclick: startMeasurement }, 'Messen (60 s)');
+  const calQuick = h('button.btn', { type: 'button', onclick: startCalibration }, 'Kalibrieren');
   const hIn = h('input.input', { type: 'text', inputmode: 'decimal', oninput: onHeight });
   const stats = h('div.stats');
-  const sA = stat('|a| Mittel', '–', 'm/s²'), sStd = stat('Streuung', '–', 'm/s²');
-  const sG = stat('g kalibriert', '–', 'm/s²'), sD = stat('Δ zur Kalibrierung', '–', 'mGal');
+  const sA = stat('Betrag (Mittel)', '–', 'm/s²'), sStd = stat('Streuung', '–', 'm/s²');
+  const sG = stat('Schwere kalibriert', '–', 'm/s²'), sD = stat('Δ zur Kalibrierung', '–', 'mGal');
   const sAx = stat('Lage', '–'), sN = stat('Abtastung', '–');
   sG.el.classList.add('gravity-big'); sA.el.classList.add('gravity-big');
   stats.append(sA.el, sStd.el, sG.el, sD.el, sAx.el, sN.el);
   const measNotes = h('div.gravity-notes');
   const measCard = h('div.card.gravity-card', h('div.card-title', 'Ortsbestimmung'),
-    h('div.list-row', { style: { padding: 0, border: 0, minHeight: 0 } },
-      h('span.k', 'Höhe Messort'), h('span.gravity-hin', hIn, h('span', 'm'))),
-    measBtn);
+    h('div.gravity-hrow', h('span', 'Höhe Messort'), h('span.gravity-hin', hIn, h('span', 'm'))),
+    h('div.btn-row', calQuick, measBtn));
 
   // Karte
   const mapEl = h('div.map.gravity-map');
@@ -136,7 +136,7 @@ export function mount(body, ctx) {
 
   body.append(banner, sensorBanner, gridBanner, measCard, stats, measNotes, mapEl, viewSeg,
     h('div.section-title', 'Kandidaten'), candList,
-    calCard,
+    h('div.section-title', 'Kalibrierung'), calRows, calNotes, calBtn,
     h('div.section-title', 'Modell am Kalibrierort'), modelList,
     h('div.section-title', 'Verlauf'), histList, clearBtn, foot);
 
@@ -207,6 +207,7 @@ export function mount(body, ctx) {
   function renderMeas() {
     if (document.activeElement !== hIn) hIn.value = hOverride != null ? numStr(hOverride) : '';
     hIn.placeholder = cal ? numStr(cal.alt || 0) : '0';
+    calQuick.hidden = !!cal;
     measNotes.textContent = '';
     const e = selected;
     if (!e) {
