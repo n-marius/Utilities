@@ -165,7 +165,7 @@ export function mountFix(body, ctx, cfg) {
   const bar = h('div.fix-bar', plusBtn, minusBtn, h('div.fix-spacer'), clearBtn);
   const tbody = h('tbody');
   const table = h('table.table.fix-table',
-    h('thead', h('tr', h('th', 'Nr.'), cfg.objectColumn && h('th', 'Objekt'), h('th', 'Datum'), h('th', 'Zeit'), h('th.r', 'Höhe'),
+    h('thead', h('tr', h('th', 'Nr.'), cfg.objectColumn && h('th', 'Objekt'), h('th', 'Zeit'), h('th.r', 'Höhe'),
       h('th.r', 'Azimut'), h('th.r.nt', '±h'), h('th.r.nt', '±Az'))),
     tbody);
   const tableCard = h('div.card.flush', h('div.fix-wrap', table));
@@ -245,7 +245,7 @@ export function mountFix(body, ctx, cfg) {
     const one = mcRes && !mcRes.inconsistent && mcRes.regions.length === 1 && mcRes.regions[0].decl != null;
     const decl = one ? mcRes.regions[0].decl : null;
     if (!rows.length) {
-      tbody.append(h('tr.fix-empty', h('td', { colSpan: cfg.objectColumn ? 8 : 7 }, 'Noch keine Messungen. Mit + messen.')));
+      tbody.append(h('tr.fix-empty', h('td', { colSpan: cfg.objectColumn ? 7 : 6 }, 'Noch keine Messungen. Mit + messen.')));
     }
     rows.forEach((r, i) => {
       const azCell = decl != null
@@ -255,8 +255,8 @@ export function mountFix(body, ctx, cfg) {
         { onclick: () => { selected = selected === r.id ? null : r.id; renderTable(); } },
         h('td', String(i + 1) + (flagOf(i) ? ' !' : '')),
         cfg.objectColumn && h('td.fix-obj', bodyName(r.body)),
-        r.date ? h('td', deDateShort(r.date)) : h('td.nil', '–'),
-        r.time ? h('td', r.time) : h('td.nil', '–'),
+        // Uhrzeit, darunter Datum (leer = unbekannt)
+        h('td' + (r.time ? '' : '.nil'), r.time || 'ohne Zeit', h('small', r.date ? deDateShort(r.date) : 'ohne Datum')),
         h('td.r', `${fmt(r.h, 1)}°`),
         azCell,
         h('td.r', fmt(r.eh, 1)),
