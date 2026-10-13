@@ -10,7 +10,7 @@ Offline-fähige Web-App (PWA) mit fünf Werkzeugen: Höhenmesser, GPS (offline),
    (GitHub Pages für private Repositories setzt ein kostenpflichtiges GitHub-Konto voraus.)
 2. Adresse in **Safari** öffnen → Teilen-Symbol → **Zum Home-Bildschirm**.
 3. App einmal online starten; danach ist sie vollständig offline nutzbar.
-4. Für Offline-Karten: Kartenausschnitt online ansehen oder mit dem Download-Knopf auf der Karte speichern (bis 400 Kacheln je Vorgang).
+4. Für Offline-Karten: Kartenausschnitt online ansehen oder mit dem Download-Knopf auf der Karte speichern (bis 250 Kacheln je Vorgang; die Kachelserver untersagen Massen-Downloads).
 5. Für die Satellitenberechnung im GPS-Werkzeug einmal online „Bahndaten laden“.
 
 Berechtigungen: Standort (GPS, Inertialnavigation-Start, Koordinaten) und „Bewegung & Ausrichtung“ (Inertialnavigation, Sonnenortung) werden beim ersten Gebrauch abgefragt.
@@ -27,4 +27,4 @@ Berechtigungen: Standort (GPS, Inertialnavigation-Start, Koordinaten) und „Bew
 - Nach Änderungen an Dateien: `node scripts/precache.js` (aktualisiert Offline-Dateiliste und Version im Service Worker).
 - Icons neu erzeugen: `node scripts/icons.js` (benötigt Playwright/Chromium).
 
-Drittsoftware: Leaflet (BSD-2), satellite.js (MIT), geomagnetism/WMM2025 (MIT/gemeinfrei). Kartendaten © OpenStreetMap-Mitwirkende, CARTO, OpenTopoMap.
+Drittsoftware: Leaflet (BSD-2), satellite.js (MIT), geomagnetism/WMM2025 (MIT/gemeinfrei). Kartendaten © OpenStreetMap-Mitwirkende, OpenTopoMap.

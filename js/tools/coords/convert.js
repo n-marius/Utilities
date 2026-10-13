@@ -268,7 +268,9 @@ export function toGK(lat, lon) {
 
 export function fromGK(r, hw) {
   const d = gkInverse(r, hw);
-  const w = dhdnToWGS84(d.lat, d.lon, 0);
+  // Bessel-Höhe so wählen, dass die WGS84-Höhe 0 wird (passend zur Hinrichtung)
+  let hb = 0, w;
+  for (let i = 0; i < 3; i++) { w = dhdnToWGS84(d.lat, d.lon, hb); hb -= w.h; }
   return { lat: w.lat, lon: w.lon };
 }
 
@@ -330,7 +332,8 @@ export function toLV95(lat, lon) {
 
 export function fromLV95(E, N) {
   const b = lv95Inverse(E, N);
-  const w = fromECEF(...helmert(toECEF(b.lat, b.lon, 0, BESSEL), CH_TO_WGS84), WGS84);
+  let hb = 0, w;
+  for (let i = 0; i < 3; i++) { w = fromECEF(...helmert(toECEF(b.lat, b.lon, hb, BESSEL), CH_TO_WGS84), WGS84); hb -= w.h; }
   return { lat: w.lat, lon: w.lon };
 }
 
@@ -617,7 +620,7 @@ export function fmtDMS(p) {
   const part = (v, pos, neg) => {
     const t = Math.round(Math.abs(v) * 360000);
     const d = Math.floor(t / 360000), mm = Math.floor((t % 360000) / 6000), ss = (t % 6000) / 100;
-    return `${d}° ${mm}′ ${ss.toFixed(2)}″ ${v < 0 ? neg : pos}`;
+    return `${d}°${mm}′${ss.toFixed(2)}″${v < 0 ? neg : pos}`;
   };
   return `${part(p.lat, 'N', 'S')}, ${part(normLon(p.lon), 'E', 'W')}`;
 }
@@ -729,7 +732,7 @@ export const FORMATS = [
     parse: parseLatLon, format: fmtDDM
   },
   {
-    id: 'dms', label: 'Grad, Minuten, Sekunden', example: '48° 8′ 13.75″ N, 11° 34′ 34.05″ E',
+    id: 'dms', label: 'Grad, Minuten, Sekunden', example: '48°8′13.75″N, 11°34′34.05″E',
     parse: parseLatLon, format: fmtDMS
   },
   {
@@ -761,7 +764,7 @@ export const FORMATS = [
     }
   },
   {
-    id: 'lv95', label: 'SwissGrid LV95', example: 'E 2600000 N 1200000',
+    id: 'lv95', label: 'SwissGrid LV95', example: 'E 2683304 N 1247926',
     hint: 'CH1903+ · Datum über 3-Parameter-Verschiebung, Genauigkeit etwa ± 1 m',
     outside: 'außerhalb der Schweiz',
     parse: parseLV95,
@@ -771,12 +774,12 @@ export const FORMATS = [
     }
   },
   {
-    id: 'olc', label: 'Plus Code', example: '8FWH4HPG+F7Q',
+    id: 'olc', label: 'Plus Code', example: '8FWH4HPG+VC9',
     parse: t => withArea(olcDecode(t)),
     format: p => olcEncode(p.lat, p.lon, 11)
   },
   {
-    id: 'geohash', label: 'Geohash', example: 'u281z7j5mc',
+    id: 'geohash', label: 'Geohash', example: 'u281z7j7pp',
     parse: t => withArea(geohashDecode(t)),
     format: p => geohashEncode(p.lat, p.lon, 10)
   },
@@ -786,16 +789,11 @@ export const FORMATS = [
     format: p => maidenheadEncode(p.lat, p.lon, 6)
   },
   {
-    id: 'ecef', label: 'ECEF (WGS84), X Y Z in m', example: 'X 4177621.4 Y 855647.5 Z 4727107.5',
+    id: 'ecef', label: 'ECEF (WGS84), X Y Z in m', example: 'X 4177631 Y 855730 Z 4727067',
     parse: parseECEF,
     format: p => {
       const [x, y, z] = toECEF(p.lat, p.lon, p.h || 0);
-      return `X ${x.toFixed(1)} Y ${y.toFixed(1)} Z ${z.toFixed(1)}`;
+      return `X ${Math.round(x)} Y ${Math.round(y)} Z ${Math.round(z)}`;
     }
   }
 ];
-
-/** Text für die Zwischenablage: typografische Striche durch ASCII ersetzen. */
-export function asciiCopy(text) {
-  return text.replace(/′/g, "'").replace(/″/g, '"');
-}

@@ -71,6 +71,7 @@ const waitFor = (fn, ms) => new Promise(res => {
 });
 
 const fmtDeg = d => d == null ? '–' : fmt(wrap360(Math.round(d)) % 360, 0) + '°';
+const fmtErr = r => '±' + (r < 10 ? fmt(r, 1) + '\u202fm' : fmtDist(r).replace(' ', '\u202f'));
 const fmtIn = p => p.map(v => String(+v.toFixed(6)).replace('.', ',')).join(' ');
 const fmtSigned = (d, digits = 1) => (d >= 0 ? '+' : '−') + fmt(Math.abs(d), digits) + '°';
 
@@ -97,8 +98,8 @@ export function mount(body, ctx) {
   let det = new StepDetector(), sd = null;
   let lastMotionT = null, tickPrev = null;
   let motionCount = 0, relCount = 0, motionHz = 0, relHz = 0, rateT = performance.now();
-  let noLinAcc = false, warnBg = false;
-  let follow = true, saveT = 0;
+  let noLinAcc = false, warnBg = false, linOk = 0, linNull = 0;
+  let follow = true, saveT = 0, hasLast = !!load(LAST_KEY, null);
 
   // ---------- Aufbau ----------
   const mapEl = h('div.map.ins-map');
@@ -317,7 +318,7 @@ export function mount(body, ctx) {
     cfg.manPos = p; cfg.manE0 = e0 || 0; saveCfg();
     inPos.value = fmtIn(p);
     posMsg.classList.remove('ins-err');
-    posMsg.textContent = fmtLatLon(p[0], p[1], 5) + (e0 ? ` · ±${fmt(e0, 0)} m übernommen` : '');
+    posMsg.textContent = fmtLatLon(p[0], p[1], 5) + (e0 ? ` · ${fmtErr(e0)} übernommen` : '');
     render();
   }
   function useLast() {
@@ -395,7 +396,7 @@ export function mount(body, ctx) {
     det = new StepDetector();
     sd = new Strapdown({ zupt: cfg.zupt });
     lastHeading = sp.heading;
-    noLinAcc = false; warnBg = false; note = '';
+    noLinAcc = false; warnBg = false; note = ''; linOk = 0; linNull = 0;
     follow = true;
     map.setView([sp.lat, sp.lon], Math.max(map.getZoom(), 17), { animate: false });
     await beginMotion();
@@ -446,7 +447,7 @@ export function mount(body, ctx) {
     if (state === 'running') endMotion();
     if (run) {
       const p = curPos();
-      if (p) save(LAST_KEY, { lat: p[0], lon: p[1], err: run.err, t: Date.now() });
+      if (p) { save(LAST_KEY, { lat: p[0], lon: p[1], err: run.err, t: Date.now() }); hasLast = true; }
     }
     run = null; sd = null; haveRel = false; note = ''; warnBg = false;
     remove(RUN_KEY);
@@ -494,7 +495,8 @@ export function mount(body, ctx) {
       }
     } else {
       const a = e.acceleration;
-      if (!a || a.x == null) { noLinAcc = true; return; }
+      if (!a || a.x == null) { linNull++; noLinAcc = linOk === 0 && linNull > 30; return; }
+      linOk++; noLinAcc = false;
       if (!rel || dt <= 0) return;
       const R = rotationMatrix(rel.alpha + (haveRel ? c : 0), rel.beta, rel.gamma);
       const [aE, aN] = toENU(R, a.x, a.y, a.z);
@@ -574,7 +576,7 @@ export function mount(body, ctx) {
     strapPanel.hidden = method !== 'strapdown';
     methodCard.hidden = !idle && method !== 'strapdown';
     segMethod.hidden = !idle;
-    btnLast.hidden = !load(LAST_KEY, null);
+    btnLast.hidden = !hasLast;
 
     btnMain.textContent = { idle: 'Start', running: 'Stopp', paused: 'Fortsetzen', ended: 'Neue Messung' }[state];
     btnReset.hidden = idle || state === 'ended';
@@ -619,7 +621,7 @@ export function mount(body, ctx) {
       const tS = run.tRun / 1000;
       run.err = errorRadius({ method: run.method, e0: run.start.e0, dist: run.dist, t: tS, psi0: run.start.psi0 });
       sKurs.set(fmtDeg(hd), 'rw');
-      sErr.set('±' + fmtDist(run.err).replace(' ', ' '));
+      sErr.set(fmtErr(run.err));
       sDist.set(fmtDist(run.dist));
       if (run.method === 'steps') { sSteps.el.querySelector('.k').textContent = 'Schritte'; sSteps.set(fmt(run.steps, 0)); }
       else { sSteps.el.querySelector('.k').textContent = 'Geschw. akt.'; sSteps.set(fmt(run.speedNow * 3.6, 1), 'km/h'); }
@@ -644,7 +646,7 @@ export function mount(body, ctx) {
       sSteps.el.querySelector('.k').textContent = cfg.method === 'steps' ? 'Schritte' : 'Geschw. akt.';
       sKurs.set(fmtDeg(hd), hd != null ? 'rw' : '');
       const r0 = cfg.start === 'gps' ? (fix ? fix.acc : null) : (cfg.manPos ? cfg.manE0 || 0 : null);
-      sErr.set(r0 != null ? '±' + fmtDist(r0).replace(' ', ' ') : '–');
+      sErr.set(r0 != null ? fmtErr(r0) : '–');
       sPos.set(p ? fmtLatLon(p[0], p[1], 5) : '–');
       setHeadingUI(hd, 'Startkurs rw');
       if (lastTrackLen !== 0) { trackLayer.setLatLngs([]); lastTrackLen = 0; }

@@ -27,10 +27,11 @@ export function mount(body, ctx) {
 
   // ---------- Zustand ----------
   let running = false, stopWatch = null, wakeRelease = null, restartTimer = null;
-  let startT = 0, firstFixMs = null, fixes = 0, last = null, lastErr = null, lastSaved = 0;
+  let startT = 0, firstFixMs = null, fixes = 0, last = null, lastSaved = 0;
   const accHist = [];
   let follow = load('gps:follow', true);
   let mask = load('gps:mask', 5);
+  let hidden = new Set(load('gps:hide', []));
   let orbits = loadOrbits();
   let sats = buildSatrecs(orbits);
   let loading = false;
@@ -58,12 +59,13 @@ export function mount(body, ctx) {
   const bar = h('div.progress.gps-bar', h('i'));
   const convT = h('div.gps-conv.small.muted');
   const spark = h('div.gps-spark');
+  const sparkCap = h('div.gps-spark-cap.small.muted', 'Verlauf der Genauigkeit (logarithmisch) · gestrichelt: ±10 m');
   const meta = h('div.gps-meta.small.muted');
   const runBtn = h('button.btn.block', { type: 'button', onclick: () => (running ? stop() : start()) });
   const errBanner = h('div.banner.warn.gps-blk', { hidden: true });
   const statusCard = h('div.card.gps-status.gps-blk',
     h('div.gps-head', dot, h('div.gps-head-txt', headT, headSub), badge),
-    bar, convT, spark, meta, runBtn);
+    bar, convT, h('div', spark, sparkCap), meta, runBtn);
   body.append(statusCard, errBanner);
 
   // ---------- Kennzahlen ----------
@@ -78,7 +80,7 @@ export function mount(body, ctx) {
   const sCourse = stat('Kurs');
   const sSpeed = stat('Geschwindigkeit');
   const sTime = stat('Zeit des Fixes');
-  const sSats = stat('Satelliten (berechnet)');
+  const sSats = stat('Satelliten (ber.)');
   body.append(
     h('div.stats.gps-blk', sPos.el, sAcc.el, sAlt.el, sCourse.el, sSpeed.el, sTime.el, sSats.el),
     h('p.gps-note.small.muted.gps-blk', 'Höhe: so wie vom Gerät geliefert. iOS gibt Höhe über dem Meeresspiegel an, andere Plattformen teils über dem WGS84-Ellipsoid (in Deutschland rund 40–50 m mehr). Kurs und Geschwindigkeit nur in Bewegung.')
@@ -101,7 +103,7 @@ export function mount(body, ctx) {
     h('div.section-title', 'Satelliten'),
     h('div.card.gps-blk',
       h('div.card-title', 'Über dem Horizont · berechnet'),
-      h('p.gps-honest.small.muted', 'Aus Bahndaten berechnet, welche Satelliten am Standort über dem Horizont stehen. Welche das Gerät tatsächlich empfängt, gibt der Browser nicht preis.'),
+      h('p.gps-honest.small.muted', 'Aus Bahndaten berechnet, welche Satelliten am Standort über dem Horizont stehen. Welche das Gerät tatsächlich empfängt, gibt der Browser nicht preis. System antippen blendet es im Diagramm aus.'),
       skyWarn, counts, skyBox, skyBasis, skyDop,
       h('div.gps-mask', h('span.small.muted', 'Elevationsmaske'), maskSeg),
       details)
@@ -157,7 +159,6 @@ export function mount(body, ctx) {
     const now = Date.now();
     if (firstFixMs == null) firstFixMs = now - startT;
     fixes++;
-    lastErr = null;
     errBanner.hidden = true;
     clearTimeout(restartTimer);
     const prevT = last ? last.t : 0;
@@ -179,7 +180,7 @@ export function mount(body, ctx) {
     }
     const ce = circle.getElement && circle.getElement();
     if (ce) ce.classList.toggle('gps-acc-coarse', quality(last.acc) === 'grob');
-    if (follow) viewTo(last);
+    if (follow || fixes === 1) viewTo(last); // erster Fix der Sitzung immer zeigen
 
     if (now - lastSaved > 10000) {
       save('gps:last', { lat: last.lat, lon: last.lon, alt: last.alt, acc: last.acc, t: last.t });
@@ -190,7 +191,6 @@ export function mount(body, ctx) {
   }
 
   function onErr(err) {
-    lastErr = err;
     errBanner.textContent = geoErrorText(err);
     errBanner.hidden = false;
     if (err && err.code === 1) { stop(); return; }
@@ -209,7 +209,6 @@ export function mount(body, ctx) {
     running = true;
     startT = Date.now();
     firstFixMs = null;
-    lastErr = null;
     errBanner.hidden = true;
     stopWatch = watchPosition(onPos, onErr, { timeout: 120000 });
     render();
@@ -279,7 +278,7 @@ export function mount(body, ctx) {
       convT.textContent = running ? 'Genauigkeit: noch kein Fix' : 'Genauigkeit: –';
     }
     spark.replaceChildren(svg(sparkSVG(accHist)));
-    spark.hidden = accHist.length < 2;
+    spark.hidden = sparkCap.hidden = accHist.length < 2;
 
     const parts = [];
     if (firstFixMs != null) parts.push('Erster Fix nach ' + fmtDuration(firstFixMs));
@@ -342,12 +341,21 @@ export function mount(body, ctx) {
     const all = lookAngles(sats, b.lat, b.lon, Number.isFinite(b.alt) && b.alt !== null ? b.alt : 0, now);
     skyList = all.filter(s => s.el >= 0);
     const vis = all.filter(s => s.el >= mask);
-    skyBox.innerHTML = skyplotSVG(skyList, mask);
+    skyBox.innerHTML = skyplotSVG(skyList.filter(s => !hidden.has(s.sys)), mask);
 
     counts.replaceChildren(...SYSTEMS.map(s => {
       const has = orbits[s.key] && orbits[s.key].list && orbits[s.key].list.length;
       const n = vis.filter(v => v.sys === s.key).length;
-      return h('div.gps-count', h('div.gps-count-k', svg(legendIcon(s.key)), h('span', s.name)), h('div.gps-count-v', has ? String(n) : '–'));
+      const off = hidden.has(s.key);
+      return h('button.gps-count', {
+        type: 'button', class: off ? 'is-off' : '', 'aria-pressed': String(!off),
+        title: off ? s.name + ' im Diagramm zeigen' : s.name + ' im Diagramm ausblenden',
+        onclick: () => {
+          if (hidden.has(s.key)) hidden.delete(s.key); else hidden.add(s.key);
+          save('gps:hide', [...hidden]);
+          updateSky();
+        }
+      }, h('div.gps-count-k', svg(legendIcon(s.key)), h('span', s.name)), h('div.gps-count-v', has ? String(n) : '–'));
     }));
     sSats.set(String(vis.length), `über ${mask}°`);
 
@@ -357,9 +365,10 @@ export function mount(body, ctx) {
     const dGps = dop(vis.filter(v => v.sys === 'gps'));
     const dAll = dop(vis);
     const enough = vis.length >= 4;
+    const dopTxt = d => (d ? `PDOP ${fmt(d.pdop, 1)} · HDOP ${fmt(d.hdop, 1)}` : 'zu wenige');
     skyDop.replaceChildren(
-      h('div.gps-dop-row', h('span.muted', 'Geometrie (PDOP / HDOP)'),
-        h('span.num', `GPS ${dGps ? fmt(dGps.pdop, 1) + ' / ' + fmt(dGps.hdop, 1) : '–'} · alle ${dAll ? fmt(dAll.pdop, 1) + ' / ' + fmt(dAll.hdop, 1) : '–'}`)),
+      h('div.gps-dop-row', h('span.muted', 'Geometrie nur GPS'), h('span.num', dopTxt(dGps))),
+      h('div.gps-dop-row', h('span.muted', 'Geometrie alle Systeme'), h('span.num', dopTxt(dAll))),
       h('div.small.muted', enough
         ? `${vis.length} berechnet sichtbar – mindestens 4 nötig für 3D, 3 für 2D. DOP gilt, falls alle empfangen werden (kleiner = besser).`
         : `Nur ${vis.length} berechnet sichtbar – für 3D sind 4 nötig, 3 reichen für eine grobe 2D-Position.`)
@@ -399,7 +408,8 @@ export function mount(body, ctx) {
         any = true;
         const ei = epochInfo(e.list);
         const d = ei ? ageDays(ei.median, now) : NaN;
-        txt = `${e.list.length} Sat. · Stand ${ei ? new Date(ei.median).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) : '–'} (${fmtAge(d)})${d > STALE_DAYS ? ' · veraltet' : ''}`;
+        txt = `${e.list.length} Sat. · ${fmtAge(d)}${d > STALE_DAYS ? ' · veraltet' : ''}`;
+        r.v.title = ei ? 'Bahnepoche (Median) ' + new Date(ei.median).toLocaleString('de-DE') + ', geladen ' + new Date(e.fetched).toLocaleString('de-DE') : '';
         if (st && st.phase === 'err') txt += ' · Aktualisierung fehlgeschlagen';
       } else txt = 'nicht geladen';
       r.v.textContent = txt;
@@ -517,8 +527,8 @@ const fmtAcc = a => (a < 10 ? fmt(a, 1) : a < 10000 ? fmt(a, 0) : fmt(a / 1000, 
 
 function fmtAge(d) {
   if (!Number.isFinite(d)) return '–';
-  if (d < 1) return `${Math.max(1, Math.round(d * 24))} h alt`;
-  return `${fmt(d, 0)} ${Math.round(d) === 1 ? 'Tag' : 'Tage'} alt`;
+  if (d < 1) return `vor ${Math.max(1, Math.round(d * 24))} h`;
+  return `vor ${fmt(d, 0)} ${Math.round(d) === 1 ? 'Tag' : 'Tagen'}`;
 }
 
 function compass(deg) {
@@ -571,6 +581,7 @@ function injectStyle() {
 .gps-spark-line { fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linejoin: round; }
 .gps-spark-target { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 4 4; }
 .gps-meta { line-height: 1.4; }
+.gps-spark-cap { font-size: 11.5px; margin-top: 4px; }
 .gps-wide { grid-column: 1 / -1; }
 .gps-tap { cursor: pointer; }
 .gps-tap:active { background: var(--surface-2); }
@@ -581,7 +592,9 @@ function injectStyle() {
 .gps-ocard .gps-p { margin: 0; }
 .gps-counts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius-s); overflow: hidden; margin: 10px 0 4px; }
 .gps-counts:empty { display: none; }
-.gps-count { background: var(--surface); padding: 8px 6px; text-align: center; min-width: 0; }
+.gps-count { appearance: none; border: 0; background: var(--surface); padding: 8px 6px; text-align: center; min-width: 0; min-height: 56px; color: var(--text); transition: opacity .15s; }
+.gps-count:active { background: var(--surface-2); }
+.gps-count.is-off { opacity: .4; }
 .gps-count-k { display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 11px; color: var(--text-2); white-space: nowrap; }
 .gps-count-v { font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; margin-top: 2px; }
 .gps-sky { max-width: 340px; margin: 0 auto; width: 100%; }
@@ -598,7 +611,8 @@ function injectStyle() {
 .gps-sat-t { font-size: 9px; fill: var(--text-2); font-variant-numeric: tabular-nums; }
 .gps-basis { text-align: center; margin-top: 4px; }
 .gps-dop { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
-.gps-dop-row { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; flex-wrap: wrap; }
+.gps-dop-row { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; }
+.gps-dop-row .num { text-align: right; }
 .gps-mask { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .gps-mask .seg { flex: 0 1 220px; }
 .gps-details { margin-top: 12px; }

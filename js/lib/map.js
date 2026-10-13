@@ -8,8 +8,8 @@ import { h } from './ui.js';
 export const LAYERS = {
   standard: {
     name: 'Standard',
-    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '© OpenStreetMap, © CARTO' }
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    opts: { maxZoom: 19, attribution: '© OpenStreetMap' }
   },
   topo: {
     name: 'Topo',
@@ -53,11 +53,11 @@ export function createMap(container, opts = {}) {
 
   // Kartenbedienknöpfe oben rechts
   const btns = h('div.map-overlay-btns');
-  const layerBtn = h('button.btn', { type: 'button', title: 'Kartenstil', onclick: e => {
+  const layerBtn = h('button.btn', { type: 'button', title: 'Kartenstil', html: LAYER_ICON, onclick: async e => {
     e.stopPropagation();
     const keys = Object.keys(LAYERS);
     setLayer(keys[(keys.indexOf(layerKey) + 1) % keys.length]);
-    layerBtn.textContent = LAYERS[layerKey].name[0];
+    (await import('./ui.js')).toast('Karte: ' + LAYERS[layerKey].name);
   } });
   const dlBtn = h('button.btn', { type: 'button', title: 'Ausschnitt offline speichern', html: DL_ICON, onclick: e => {
     e.stopPropagation();
@@ -77,7 +77,6 @@ export function createMap(container, opts = {}) {
     }
   };
   setLayer(layerKey);
-  layerBtn.textContent = LAYERS[layerKey].name[0];
 
   // Leaflet braucht nach dem Einblenden die korrekte Größe
   requestAnimationFrame(() => map.invalidateSize());
@@ -100,8 +99,9 @@ export function trackLine(latlngs = []) {
   return window.L.polyline(latlngs, { className: 'u-track', interactive: false });
 }
 
-/** Sichtbaren Ausschnitt (aktuelle Zoomstufe bis +3, max. maxTiles Kacheln) vorab laden. */
-export async function prefetchVisible(api, { maxTiles = 400, onProgress } = {}) {
+/** Sichtbaren Ausschnitt (aktuelle Zoomstufe bis +3, max. maxTiles Kacheln) vorab laden.
+ *  Bewusst klein gehalten: Die Kachelserver (OSM, OpenTopoMap) untersagen Massen-Downloads. */
+export async function prefetchVisible(api, { maxTiles = 250, onProgress } = {}) {
   const { map, layer } = api;
   const { toast } = await import('./ui.js');
   if (!navigator.onLine) { toast('Offline – Download nicht möglich'); return; }
@@ -138,4 +138,5 @@ export async function prefetchVisible(api, { maxTiles = 400, onProgress } = {}) 
   toast(failed ? `${done - failed} Kacheln gespeichert, ${failed} fehlgeschlagen` : `${done} Kacheln offline gespeichert`, 2600);
 }
 
+const LAYER_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 8l10 5 10-5-10-5z"/><path d="m2 13 10 5 10-5"/></svg>';
 const DL_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>';

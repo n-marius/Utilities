@@ -10,7 +10,7 @@ const ASSETS = [
 const APP_CACHE = 'utilities-app-' + VERSION;
 const TILE_CACHE = 'utilities-tiles-v1';
 const DATA_CACHE = 'utilities-data-v1';
-const TILE_HOSTS = ['basemaps.cartocdn.com', 'tile.opentopomap.org', 'tile.openstreetmap.org'];
+const TILE_HOSTS = ['tile.openstreetmap.org', 'tile.opentopomap.org'];
 const DATA_HOSTS = ['celestrak.org'];
 const MAX_TILES = 6000;
 
