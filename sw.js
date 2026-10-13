@@ -1,7 +1,7 @@
 // Service Worker: App offline verfügbar machen, Kartenkacheln zwischenspeichern.
 // ASSETS und VERSION werden von scripts/precache.js aktualisiert.
 
-const VERSION = 'beb10b3573';
+const VERSION = '5ed12c0d0c';
 const ASSETS = [
   './',
   'index.html',

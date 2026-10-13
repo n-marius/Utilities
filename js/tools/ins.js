@@ -202,7 +202,7 @@ export function mount(body, ctx) {
   const strapPanel = h('div.ins-gap',
     strapNote,
     h('div.field', h('label', 'Stillstandserkennung (ZUPT)'), segZupt),
-    h('div.banner.warn', h('b', 'Driftet stark. '), 'Reine Doppelintegration der Smartphone-Beschleunigung: kleinste Messfehler wachsen mit t². Nur für kurze Zeiträume (Sekunden bis wenige Minuten) aussagekräftig.')
+    h('div.banner.warn', h('b', 'Driftet stark. '), 'Reine Doppelintegration der Smartphone-Beschleunigung: kleinste Messfehler wachsen mit der Dauer jedes Bewegungsabschnitts im Quadrat. Erkannte Stillstände (ZUPT) begrenzen die Drift; ununterbrochene Bewegung ist nur über kurze Zeit (Sekunden bis wenige Minuten) aussagekräftig.')
   );
   const methodCard = h('div.card.ins-gap', h('div.card-title', 'Verfahren'), segMethod, stepsPanel, strapPanel);
 
