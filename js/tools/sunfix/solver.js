@@ -328,7 +328,7 @@ function describe(sol, data, L) {
 /**
  * Hauptlösung (+ Alternativen) bestimmen.
  * obs: [{t, hasDate, hasTime, h (scheinbar), az (magnetisch), eh, eZ}]
- * opts: {table: makeDeclTable(...)}
+ * opts: {table: makeDeclTable(...), tzLon: Bezugsmeridian der Gerätezeitzone (nur zur Auswahl bei Mehrdeutigkeit)}
  */
 export function solve(obs, opts = {}) {
   if (!obs.length) return { ok: false, reason: 'Keine Messungen' };
@@ -352,21 +352,26 @@ export function solve(obs, opts = {}) {
 
   const nEq = data.length * 2 + (L.mFree ? 1 : 0);
   const under = nEq < L.n;
-  const main = describe(uniq[0], data, L);
-  const alternatives = [];
-  if (!under) {
-    for (const s of uniq.slice(1)) {
-      const d = describe(s, data, L);
-      if (d.rms <= Math.max(1.2, main.rms * 1.5 + 0.3) && alternatives.length < 3) alternatives.push(d);
-    }
+  let all = uniq.map(s => describe(s, data, L));
+  const best = all[0];
+  const fits = d => d.rms <= Math.max(1.2, best.rms * 1.5 + 0.3);
+  let byTz = false;
+  if (!under && L.lonKnown && Number.isFinite(opts.tzLon)) {
+    // Gleich gute Lösungen (z. B. durch die ortsabhängige Missweisung): die zur Zeitzone passende bevorzugen
+    const good = all.filter(fits);
+    const tzd = d => Math.abs(wrap180(d.lon - opts.tzLon));
+    const pick = good.reduce((a, b) => (tzd(b) < tzd(a) ? b : a), best);
+    if (pick !== best) { byTz = true; all = [pick, ...all.filter(d => d !== pick)]; }
   }
+  const main = all[0];
+  const alternatives = under ? [] : all.slice(1).filter(fits).slice(0, 3);
   const notes = [];
   if (!L.lonKnown) notes.push('Länge unbestimmt (keine Uhrzeit)');
   if (L.mFree) notes.push('Missweisung unbekannt (Länge fehlt) – aus Messung geschätzt');
   if (under) notes.push(L.dFree ? 'Unterbestimmt: ohne Datum mehrere Messungen über einige Stunden nötig' : 'Unterbestimmt: weitere Messungen nötig');
   else if (L.dFree && data.length < 3) notes.push('Ohne Datum: Ergebnis schwach bestimmt – mehr Messungen über einige Stunden verbessern es');
   if (main.rms > 1.5) notes.push('Messungen passen schlecht zusammen (Residuen über den Fehlergrenzen)');
-  if (alternatives.length) notes.push('Mehrdeutig: ' + (alternatives.length === 1 ? 'eine weitere Lösung' : alternatives.length + ' weitere Lösungen') + ' möglich');
+  if (alternatives.length) notes.push('Mehrdeutig: ' + (alternatives.length === 1 ? 'eine weitere Lösung' : alternatives.length + ' weitere Lösungen') + ' möglich (gestrichelt)' + (byTz ? '; Auswahl nach Zeitzone des Geräts' : ''));
   return { ok: true, ...main, lonKnown: L.lonKnown, layout: L, underdetermined: under, nObs: data.length, alternatives, notes };
 }
 

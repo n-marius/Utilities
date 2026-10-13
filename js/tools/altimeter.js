@@ -90,7 +90,7 @@ function startPressureSensor(onHpa, onError) {
 // ===== Styles =====
 const CSS = `
 .altimeter-top { flex: none; }
-.altimeter-inst { width: 100%; max-width: 480px; margin: 0 auto; display: block; }
+.altimeter-inst { width: 100%; max-width: 480px; margin: 0 auto; display: block; border-radius: 8.5%; box-shadow: var(--shadow); }
 .altimeter-inst svg { width: 100%; height: auto; display: block; }
 .altimeter-housing { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
 .altimeter-screw { fill: var(--surface-2); stroke: var(--line-strong); stroke-width: 1.2; }
@@ -99,9 +99,9 @@ const CSS = `
 .altimeter-face { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
 .altimeter-tick { stroke: var(--text); stroke-width: 1.6; }
 .altimeter-tick.is-major { stroke-width: 4; }
-.altimeter-num { fill: var(--text); font: 600 37px var(--font); text-anchor: middle; dominant-baseline: central; font-variant-numeric: tabular-nums; }
-.altimeter-lbl { fill: var(--text); font: 700 15px var(--font); letter-spacing: 3px; text-anchor: middle; }
-.altimeter-lbl.is-sub { fill: var(--text-2); font-weight: 600; font-size: 11px; letter-spacing: 1.6px; }
+.altimeter-num { fill: var(--text); font: 600 37px var(--font-display, var(--font)); text-anchor: middle; dominant-baseline: central; font-variant-numeric: tabular-nums; }
+.altimeter-lbl { fill: var(--text); font: 600 14px var(--font-display, var(--font)); letter-spacing: 2.6px; text-anchor: middle; }
+.altimeter-lbl.is-sub { fill: var(--text-2); font-weight: 500; font-size: 10.5px; letter-spacing: 1.4px; }
 .altimeter-win { fill: var(--surface-2); stroke: var(--line-strong); stroke-width: 1.5; }
 .altimeter-win-sep { stroke: var(--line); stroke-width: 1; }
 .altimeter-digit { fill: var(--text); font: 600 27px var(--mono); text-anchor: middle; dominant-baseline: central; }
@@ -121,14 +121,14 @@ const CSS = `
 .altimeter-controls { display: flex; gap: 10px; align-items: stretch; }
 .altimeter-mode {
   flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px; min-height: 68px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 6px 8px; min-height: 68px;
 }
 .altimeter-opt {
   background: none; border: 0; min-width: 62px; min-height: 52px; padding: 4px 6px; border-radius: 10px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; color: var(--text-3);
   transition: color .2s;
 }
-.altimeter-opt b { font-size: 16px; font-weight: 700; letter-spacing: 1.5px; }
+.altimeter-opt b { font-family: var(--font-display, var(--font)); font-size: 16px; font-weight: 700; letter-spacing: 1.5px; }
 .altimeter-opt span { font-size: 11px; letter-spacing: .5px; }
 .altimeter-opt.is-active { color: var(--text); }
 .altimeter-opt.is-active b { color: var(--accent); }
@@ -216,8 +216,8 @@ function buildInstrument() {
   <circle class="altimeter-bezel" cx="200" cy="200" r="194"/>
   <circle class="altimeter-face" cx="200" cy="200" r="183"/>
   ${ticks}${nums}
-  <text class="altimeter-lbl" x="200" y="132">ALT</text>
-  <text class="altimeter-lbl is-sub" x="200" y="150" data-ref="scale">100 M</text>
+  <text class="altimeter-lbl" x="158" y="158">ALT</text>
+  <text class="altimeter-lbl is-sub" x="242" y="157" data-ref="scale">100 M</text>
 
   <rect class="altimeter-win" x="${DRUM_X}" y="${DRUM_Y}" width="${drumW}" height="${DRUM_H}" rx="5"/>
   <g clip-path="url(#altimeter-drum-clip)" data-ref="drum">${drum}</g>

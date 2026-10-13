@@ -18,6 +18,7 @@ const MAX_TRACK = 20000;
 
 const STYLE = `
 .ins-map { height: 42vh; min-height: 250px; }
+#tool-body > .ins-fix { flex-shrink: 0; }
 .ins-badge { position: absolute; left: 10px; top: 10px; z-index: 500; display: flex; align-items: center; gap: 8px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 5px 12px 5px 5px;
   box-shadow: 0 1px 4px rgba(0,0,0,.15); pointer-events: none; }
@@ -200,8 +201,8 @@ export function mount(body, ctx) {
   const runList = h('div.list');
   const formula = h('div.ins-formula',
     h('div', 'Schritte:  r = r₀ + 3 %·s + s·sin ψ'),
-    h('div', `Strapdown: r = r₀ + ½·b·t² + s·sin ψ, b = ${fmt(ASSUME.accelBias, 2)} m/s²`),
-    h('div', `Kursfehler: ψ = ψ₀ + ${fmt(ASSUME.gyroDrift, 1)}°/min · t`));
+    h('div', 'Strapdown: r = r₀ + ½·b·t² + s·sin ψ'),
+    h('div', `ψ = ψ₀ + ${fmt(ASSUME.gyroDrift, 1)}°/min·t, b = ${fmt(ASSUME.accelBias, 2)} m/s²`));
   const estCard = h('div.card.ins-gap',
     h('div.card-title', 'Fehlerradius (Schätzung)'),
     formula,
@@ -210,6 +211,8 @@ export function mount(body, ctx) {
   const hint = h('p.ins-note', 'Sensordaten gibt es nur bei geöffneter App und entsperrtem Bildschirm (iOS). Beim Verlassen des Werkzeugs wird angehalten; der Verlauf bleibt gespeichert, läuft aber nicht im Hintergrund weiter.');
 
   body.append(mapEl, bannerBox, stats, btnRow, status, cfgCard, methodCard, runList, estCard, hint);
+  // Flex-Kinder mit overflow:hidden würden sonst im scrollenden Spaltenlayout gestaucht
+  for (const el of body.children) el.classList.add('ins-fix');
 
   const followBtn = h('button.icon-btn', { type: 'button', title: 'Position zentrieren', 'aria-label': 'Position zentrieren', html: CENTER_ICON, onclick: () => {
     follow = true;

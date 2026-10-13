@@ -498,7 +498,7 @@ export function parseLatLon(text) {
   const s = normalize(text).toUpperCase();
   if (!s) return { error: 'Format nicht erkannt' };
   const tokens = [];
-  const re = /\s+|[;,/](?!\d)|([+-]?\d+(?:[.,]\d+)?)|(°|'|")|([NSEWO])|(-)|(.)/gy;
+  const re = /\s+|[;,/]|([+-]?\d+(?:[.,]\d+)?)|(°|'|")|([NSEWO])|(-)|(.)/gy;
   let m;
   while ((m = re.exec(s))) {
     if (m[1] !== undefined) tokens.push({ t: 'num', v: parseFloat(m[1].replace(',', '.')), neg: m[1][0] === '-', int: !/[.,]/.test(m[1]) });
@@ -521,7 +521,6 @@ export function parseLatLon(text) {
 
   // Zahlen samt Einheit sammeln, Gruppen bilden
   const nums = [];
-  let groupBreak = new Set();
   tokens.forEach((t, i) => {
     if (t.t === 'num') {
       const nx = tokens[i + 1];
@@ -567,7 +566,6 @@ export function parseLatLon(text) {
       groups.hemi[g] = hemis[0].v;
     }
   }
-  groupBreak = null;
   if (groups.length !== 2 || !groups[0].length || !groups[1].length) return { error: 'Format nicht erkannt' };
 
   const vals = [];
@@ -638,10 +636,10 @@ function withArea(r) {
 /** Zone/Band + zwei Zahlen. */
 export function parseUTM(text) {
   const s = normalize(text).toUpperCase();
-  const m = /^(\d{1,2})\s*([C-HJ-NP-X])?\b\s*[,;]?\s*(.*)$/.exec(s);
+  const m = /^(\d{1,2})(?:\s*([C-HJ-NP-X])(?![A-Z])|(?!\d))\s*[,;]?\s*(.*)$/.exec(s);
   if (!m) return { error: 'Format nicht erkannt' };
   const zone = +m[1];
-  const rest = m[3].replace(/\b[EN]\b|\b(?:OST|NORD|RW|HW)\b|[=:]/g, ' ');
+  const rest = m[3].replace(/(?:OST|NORD|[EN])(?=[\s\d=:]|$)|[=:]/g, ' ');
   if (/[A-Z]/.test(rest)) return { error: 'Format nicht erkannt' };
   const nums = numbers(rest.replace(/(\d),(?=\d{4,}\b)/g, '$1 ').replace(/,(?!\d)/g, ' '));
   if (zone < 1 || zone > 60 || nums.length !== 2) return { error: 'Format nicht erkannt' };
@@ -660,7 +658,7 @@ export function parseUTM(text) {
 /** Zwei bezeichnete Zahlen: Rechts/Hochwert bzw. Ost/Nord, auch in vertauschter Reihenfolge. */
 function parsePair(text, firstKeys, secondKeys) {
   const s = normalize(text).toUpperCase();
-  const keyRe = new RegExp(`\\b(${firstKeys}|${secondKeys})\\b\\s*[=:]?\\s*([+-]?\\d[\\d']*(?:[.,]\\d+)?)`, 'g');
+  const keyRe = new RegExp(`\\b(${firstKeys}|${secondKeys})(?![A-Z])\\s*[=:]?\\s*([+-]?\\d[\\d']*(?:[.,]\\d+)?)`, 'g');
   const tagged = {};
   let m, n = 0;
   while ((m = keyRe.exec(s))) {
@@ -679,9 +677,11 @@ export function parseGK(text) {
   const pr = parsePair(text, 'R|RW|RECHTSWERT|Y', 'H|HW|HOCHWERT|X');
   if (!pr) return { error: 'Format nicht erkannt' };
   let [r, hw, tagged] = pr;
-  if (!tagged && r > 5000000 && hw < 6000000 && hw > 1000000) [r, hw] = [hw, r];
-  const strip = Math.floor(r / 1e6);
-  if (strip < 1 || strip > 6 || hw < 5100000 || hw > 6300000) return { error: 'Format nicht erkannt' };
+  const okR = v => v >= 1e6 && v < 7e6 && Math.abs(v % 1e6 - 500000) < 400000;
+  const okH = v => v >= 5100000 && v <= 6300000;
+  // ohne Bezeichner: Rechtswert zuerst, außer nur die vertauschte Lesart ist gültig
+  if (!tagged && !(okR(r) && okH(hw)) && okR(hw) && okH(r)) [r, hw] = [hw, r];
+  if (!okR(r) || !okH(hw)) return { error: 'Format nicht erkannt' };
   const p = fromGK(r, hw);
   if (p.lat < DE_BOX.s - 1 || p.lat > DE_BOX.n + 1 || p.lon < DE_BOX.w - 2 || p.lon > DE_BOX.e + 2) {
     return { error: 'Außerhalb Deutschlands' };
@@ -706,7 +706,7 @@ export function parseLV95(text) {
 }
 
 export function parseECEF(text) {
-  const s = normalize(text).toUpperCase().replace(/\b[XYZ]\b\s*[=:]?/g, ' ').replace(/\bM\b/g, ' ');
+  const s = normalize(text).toUpperCase().replace(/[XYZ](?![A-Z])\s*[=:]?/g, ' ').replace(/\bM(?![A-Z])/g, ' ');
   if (/[A-Z]/.test(s)) return { error: 'Format nicht erkannt' };
   const nums = numbers(s.replace(/(\d),(?=\d{4,}\b)/g, '$1 ').replace(/,(?!\d)/g, ' '));
   if (nums.length !== 3) return { error: 'Format nicht erkannt' };
@@ -734,6 +734,7 @@ export const FORMATS = [
   },
   {
     id: 'utm', label: 'UTM (WGS84/ETRS89)', example: '32U 691650 5334754',
+    outside: 'außerhalb (Polargebiet)',
     parse: parseUTM,
     format: p => {
       const u = toUTM(p.lat, p.lon);
@@ -742,6 +743,7 @@ export const FORMATS = [
   },
   {
     id: 'mgrs', label: 'MGRS / UTMREF', example: '32U PU 91650 34754',
+    outside: 'außerhalb (Polargebiet)',
     parse: parseMGRS,
     format: p => {
       const m = toMGRS(p.lat, p.lon);

@@ -38,7 +38,7 @@ export function mount(body, ctx) {
   const stored = load('gps:last', null);
 
   // ---------- Karte ----------
-  const mapEl = h('div.map.gps-map');
+  const mapEl = h('div.map.gps-map.gps-blk');
   body.append(mapEl);
   const mapApi = createMap(mapEl, stored ? { center: [stored.lat, stored.lon], zoom: 14 } : {});
   const map = mapApi.map;
@@ -60,8 +60,8 @@ export function mount(body, ctx) {
   const spark = h('div.gps-spark');
   const meta = h('div.gps-meta.small.muted');
   const runBtn = h('button.btn.block', { type: 'button', onclick: () => (running ? stop() : start()) });
-  const errBanner = h('div.banner.warn', { hidden: true });
-  const statusCard = h('div.card.gps-status',
+  const errBanner = h('div.banner.warn.gps-blk', { hidden: true });
+  const statusCard = h('div.card.gps-status.gps-blk',
     h('div.gps-head', dot, h('div.gps-head-txt', headT, headSub), badge),
     bar, convT, spark, meta, runBtn);
   body.append(statusCard, errBanner);
@@ -80,8 +80,8 @@ export function mount(body, ctx) {
   const sTime = stat('Zeit des Fixes');
   const sSats = stat('Satelliten (berechnet)');
   body.append(
-    h('div.stats', sPos.el, sAcc.el, sAlt.el, sCourse.el, sSpeed.el, sTime.el, sSats.el),
-    h('p.gps-note.small.muted', 'Höhe: so wie vom Gerät geliefert. iOS gibt Höhe über dem Meeresspiegel an, andere Plattformen teils über dem WGS84-Ellipsoid (in Deutschland rund 40–50 m mehr). Kurs und Geschwindigkeit nur in Bewegung.')
+    h('div.stats.gps-blk', sPos.el, sAcc.el, sAlt.el, sCourse.el, sSpeed.el, sTime.el, sSats.el),
+    h('p.gps-note.small.muted.gps-blk', 'Höhe: so wie vom Gerät geliefert. iOS gibt Höhe über dem Meeresspiegel an, andere Plattformen teils über dem WGS84-Ellipsoid (in Deutschland rund 40–50 m mehr). Kurs und Geschwindigkeit nur in Bewegung.')
   );
 
   // ---------- Himmel (berechnet) ----------
@@ -99,7 +99,7 @@ export function mount(body, ctx) {
     h('table.table', h('thead', h('tr', h('th', 'System'), h('th', 'Satellit'), h('th.r', 'Azimut'), h('th.r', 'Höhe'))), listBody));
   body.append(
     h('div.section-title', 'Satelliten'),
-    h('div.card',
+    h('div.card.gps-blk',
       h('div.card-title', 'Über dem Horizont · berechnet'),
       h('p.gps-honest.small.muted', 'Aus Bahndaten berechnet, welche Satelliten am Standort über dem Horizont stehen. Welche das Gerät tatsächlich empfängt, gibt der Browser nicht preis.'),
       skyWarn, counts, skyBox, skyBasis, skyDop,
@@ -122,11 +122,11 @@ export function mount(body, ctx) {
   const loadBtn = h('button.btn.block', { type: 'button', onclick: () => loadOrbitsNow(true) });
   body.append(
     h('div.section-title', 'Bahndaten'),
-    h('div.card.gps-ocard',
+    h('div.card.gps-ocard.gps-blk',
       h('div.card-title', 'CelesTrak · offline gespeichert'),
       orbitList, loadBar, loadT, loadBtn,
       h('p.small.muted.gps-p', 'Dienen nur der Berechnung oben. Die Position selbst bestimmt der GNSS-Empfänger des Geräts – ohne Internet lädt er die Bahndaten (Ephemeriden) direkt aus dem Satellitensignal. Ein solcher Kaltstart dauert 30 s bis etwa 12 Minuten; freie Sicht zum Himmel hilft.')),
-    h('div.card',
+    h('div.card.gps-blk',
       h('div.card-title', 'Ortung ohne Netz'),
       h('p.small.muted.gps-p', 'Für eine grobe 2D-Position genügen dem Empfänger 3 Satelliten, für 3D mit Höhe 4. Jeder Fix wird gezeigt, auch ein grober – die Genauigkeit (blauer Kreis) wird mit mehr Satelliten und der Zeit besser. Satellitenanzahl und Signalstärken liefert der Browser nicht; angezeigt wird die berechnete Sichtbarkeit.'))
   );
@@ -544,7 +544,8 @@ function sparkSVG(hist) {
 function injectStyle() {
   if (document.getElementById('style-gps')) return;
   const css = `
-.gps-map { height: 45vh; min-height: 240px; flex: none; }
+.gps-blk { flex: none; }
+.gps-map { height: 45vh; min-height: 240px; }
 .gps-follow svg path { transition: fill .15s; }
 .gps-follow.is-on svg path { fill: currentColor; }
 .gps-status { display: flex; flex-direction: column; gap: 10px; }
