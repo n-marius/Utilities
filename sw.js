@@ -1,7 +1,7 @@
 // Service Worker: App offline verfügbar machen, Kartenkacheln zwischenspeichern.
 // ASSETS und VERSION werden von scripts/precache.js aktualisiert.
 
-const VERSION = 'fea9021687';
+const VERSION = '4c74ac5b7b';
 const ASSETS = [
   './',
   'index.html',
@@ -37,14 +37,13 @@ const ASSETS = [
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/icon.svg',
-  'icons/maskable-512.png'
+  'icons/maskable-512.png',
+  'data/basemap.json'
 ];
 
 const APP_CACHE = 'utilities-app-' + VERSION;
 const TILE_CACHE = 'utilities-tiles-v1';
-const DATA_CACHE = 'utilities-data-v1';
 const TILE_HOSTS = ['tile.openstreetmap.org', 'tile.opentopomap.org'];
-const DATA_HOSTS = ['celestrak.org'];
 const MAX_TILES = 6000;
 
 self.addEventListener('install', e => {
@@ -67,10 +66,6 @@ self.addEventListener('fetch', e => {
 
   if (TILE_HOSTS.some(h => url.hostname.endsWith(h))) {
     e.respondWith(tile(req));
-    return;
-  }
-  if (DATA_HOSTS.some(h => url.hostname.endsWith(h))) {
-    e.respondWith(networkFirst(req, DATA_CACHE));
     return;
   }
   if (url.origin === self.location.origin) {
@@ -112,18 +107,5 @@ async function trim(cache) {
     }
   } finally {
     trimming = false;
-  }
-}
-
-async function networkFirst(req, name) {
-  const cache = await caches.open(name);
-  try {
-    const res = await fetch(req);
-    if (res.ok) await cache.put(req, res.clone());
-    return res;
-  } catch {
-    const hit = await cache.match(req);
-    if (hit) return hit;
-    throw new Error('offline');
   }
 }
