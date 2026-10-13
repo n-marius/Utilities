@@ -62,13 +62,13 @@ const STYLE = `
 .stats > .stat.sunfix-wide { grid-column: 1 / -1; }
 .sunfix-table .nil { color: var(--text-3); }
 .sunfix-table tr.sunfix-empty td { text-align: center; color: var(--text-2); padding: 20px 12px; white-space: normal; cursor: default; }
-.sunfix-edit .fields { margin-top: 2px; }
+.sunfix-edit .fields { margin-top: 2px; grid-template-columns: 1fr; }
 .sunfix-edit .sunfix-in { display: flex; gap: 6px; }
 .sunfix-edit .sunfix-in .input { flex: 1; min-width: 0; }
 .sunfix-edit .sunfix-in .btn { padding: 0 10px; font-size: 14px; }
 .sunfix-meta { margin-top: 10px; font-size: 12.5px; color: var(--text-2); line-height: 1.5; font-variant-numeric: tabular-nums; }
 .sunfix-foot { font-size: 12px; color: var(--text-2); line-height: 1.45; padding: 0 4px; }
-.sunfix-ov { gap: 14px; }
+.sunfix-ov { gap: 14px; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
 .sunfix-ov svg { width: 74px; height: 74px; opacity: .9; }
 .sunfix-ov-hint { font-size: 20px; font-weight: 600; max-width: 320px; }
 .sunfix-count { font-size: 128px; font-weight: 200; line-height: 1; font-variant-numeric: tabular-nums; }
@@ -384,6 +384,7 @@ export function mount(body) {
     layoutStats();
 
     const bounds = [];
+    sRad.el.querySelector('.k').textContent = r.lonKnown ? 'Radius 95 %' : 'Breite ±95 %';
     if (r.lonKnown) {
       sPos.set(`${fmt(Math.abs(c.lat), 3)}° ${c.lat >= 0 ? 'N' : 'S'}  ${fmt(Math.abs(c.lon), 3)}° ${c.lon >= 0 ? 'O' : 'W'}`);
       dmLine.textContent = `${fmtDM(c.lat, 'N', 'S')}  ${fmtDM(c.lon, 'O', 'W')}`;
@@ -402,7 +403,7 @@ export function mount(body) {
       const m = posMarker([c.lat, c.lon]).addTo(layer);
       if (!bounds.length) bounds.push(m);
     } else {
-      sPos.set(`${fmt(Math.abs(c.lat), 2)}° ${c.lat >= 0 ? 'N' : 'S'}`, 'Breite');
+      sPos.set(`${fmt(Math.abs(c.lat), 2)}° ${c.lat >= 0 ? 'N' : 'S'}`);
       dmLine.textContent = `${fmtDM(c.lat, 'N', 'S')} · Länge unbestimmt`;
       chip.textContent = 'Länge unbestimmt (keine Uhrzeit)';
       chip.hidden = false;
@@ -410,16 +411,20 @@ export function mount(body) {
         [[Math.max(-85, lat - half), -180], [Math.min(85, lat + half), 180]],
         { className: cls, interactive: false }).addTo(layer);
       if (mcRes && Number.isFinite(mcRes.latHalf)) {
-        sRad.el.querySelector('.k').textContent = 'Breite ±95 %';
         sRad.set(`± ${fmt(mcRes.latHalf, mcRes.latHalf < 10 ? 2 : 1)}°`, `≈ ${fmtDist(mcRes.latHalf * 111195)}`);
         bounds.push(band(c.lat, Math.max(mcRes.latHalf, 0.05), 'u-alt'));
         r.alternatives.forEach((a, i) => band(a.lat, (mcRes.alts[i] && mcRes.alts[i].latHalf) || mcRes.latHalf, 'u-alt'));
       } else {
         sRad.set('…');
       }
-      bounds.push(L.polyline([[c.lat, -180], [c.lat, 180]], { className: 'u-track', interactive: false }).addTo(layer));
+      L.polyline([[c.lat, -180], [c.lat, 180]], { className: 'u-track', interactive: false }).addTo(layer);
+      // großer Ausschnitt um den Zeitzonenmeridian, Band gut sichtbar
+      const half = mcRes && Number.isFinite(mcRes.latHalf) ? mcRes.latHalf : 2;
+      const span = Math.min(80, Math.max(6, half * 3));
+      const lon0 = stdTzLon(Date.now());
+      bounds.length = 0;
+      bounds.push(L.rectangle([[Math.max(-85, c.lat - span), lon0 - 2 * span], [Math.min(85, c.lat + span), lon0 + 2 * span]], { interactive: false }));
     }
-    if (r.lonKnown) sRad.el.querySelector('.k').textContent = 'Radius 95 %';
 
     const notes = r.notes.filter(n => !(n.startsWith('Länge unbestimmt')));
     if (mcRes && r.lonKnown && mcRes.radius > 3000000) notes.unshift('Unsicherheit sehr groß – Ergebnis kaum aussagekräftig');
@@ -484,6 +489,7 @@ export function mount(body) {
   let overlay = null;
   async function startMeasure() {
     if (overlay) return;
+    beep(880, 1, 0.0001); // Audio noch innerhalb der Nutzergeste freischalten (iOS)
     const ok = await ensureMotionPermission();
     if (!ok) {
       sensorBanner.hidden = false;

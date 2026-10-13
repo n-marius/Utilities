@@ -1,10 +1,44 @@
 // Service Worker: App offline verfügbar machen, Kartenkacheln zwischenspeichern.
 // ASSETS und VERSION werden von scripts/precache.js aktualisiert.
 
-const VERSION = 'dev';
+const VERSION = '9ebf779a1d';
 const ASSETS = [
   './',
-  'index.html'
+  'index.html',
+  'manifest.webmanifest',
+  'css/app.css',
+  'js/app.js',
+  'js/lib/geo.js',
+  'js/lib/magdecl.js',
+  'js/lib/map.js',
+  'js/lib/sensors.js',
+  'js/lib/store.js',
+  'js/lib/ui.js',
+  'js/tools/altimeter.js',
+  'js/tools/coords/convert.js',
+  'js/tools/coords.js',
+  'js/tools/gps/orbits.js',
+  'js/tools/gps/skyplot.js',
+  'js/tools/gps.js',
+  'js/tools/ins/core.js',
+  'js/tools/ins.js',
+  'js/tools/sunfix/solver.js',
+  'js/tools/sunfix/sun.js',
+  'js/tools/sunfix.js',
+  'vendor/geomagnetism.min.js',
+  'vendor/leaflet/images/layers-2x.png',
+  'vendor/leaflet/images/layers.png',
+  'vendor/leaflet/images/marker-icon-2x.png',
+  'vendor/leaflet/images/marker-icon.png',
+  'vendor/leaflet/images/marker-shadow.png',
+  'vendor/leaflet/leaflet.css',
+  'vendor/leaflet/leaflet.js',
+  'vendor/satellite.min.js',
+  'icons/apple-touch-icon.png',
+  'icons/icon-192.png',
+  'icons/icon-512.png',
+  'icons/icon.svg',
+  'icons/maskable-512.png'
 ];
 
 const APP_CACHE = 'utilities-app-' + VERSION;

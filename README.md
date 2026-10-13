@@ -5,7 +5,7 @@ Offline-fähige Web-App (PWA) mit fünf Werkzeugen: Höhenmesser, GPS (offline),
 ## Installation auf dem iPhone
 
 1. App veröffentlichen (einmalig), z. B. über GitHub Pages:
-   GitHub → Repository → **Settings → Pages** → *Source: Deploy from a branch* → Branch `master`, Ordner `/ (root)` → **Save**.
+   GitHub → Repository → **Settings → Pages** → *Source: Deploy from a branch* → Branch `main`, Ordner `/ (root)` → **Save**.
    Nach 1–2 Minuten ist die App unter `https://<benutzername>.github.io/<repository>/` erreichbar.
    (GitHub Pages für private Repositories setzt ein kostenpflichtiges GitHub-Konto voraus.)
 2. Adresse in **Safari** öffnen → Teilen-Symbol → **Zum Home-Bildschirm**.
