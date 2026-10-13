@@ -1,21 +1,16 @@
 // GPS (offline): Position des GNSS-Empfängers auf der Karte samt Genauigkeitskreis,
-// Fix-Status und Kennzahlen; dazu aus offline gespeicherten Bahndaten (CelesTrak, SGP4)
-// berechnete Satellitenstände (Himmelsdiagramm, Anzahl je System, DOP).
+// Fix-Status, Konvergenz der Genauigkeit und Kennzahlen.
 //
-// Der Browser liefert nur die fertige Lösung (Lat/Lon/Genauigkeit/Höhe …), keine
-// Satelliten-Rohdaten. Die Satellitenangaben hier sind daher berechnet, nicht empfangen.
+// Der Browser liefert nur die fertige Lösung (Lat/Lon/Genauigkeit/Höhe …). Satellitenanzahl
+// und Rohdaten sind auf dem iPhone nicht zugänglich (auch nicht für native Apps).
 
-import { h, svg, stat, fmt, fmtLatLon, fmtDuration, copyText, toast, seg } from '../lib/ui.js';
+import { h, svg, stat, fmt, fmtLatLon, fmtDuration, copyText } from '../lib/ui.js';
 import { watchPosition, keepAwake, geoErrorText } from '../lib/sensors.js';
 import { createMap, posMarker, accuracyCircle } from '../lib/map.js';
-import { load, save } from '../lib/store.js';
-import { SYSTEMS, STALE_DAYS, loadOrbits, fetchGroup, epochInfo, ageDays, buildSatrecs, lookAngles, dop } from './gps/orbits.js';
-import { skyplotSVG, legendIcon } from './gps/skyplot.js';
+import { load, save, remove } from '../lib/store.js';
 
 const TARGET_ACC = 10;           // Ziel für die Konvergenzanzeige (m)
 const STALE_FIX_MS = 30000;      // ab hier gilt der letzte Fix als veraltet
-const AUTO_REFRESH_DAYS = 3;     // Bahndaten automatisch erneuern, wenn älter
-const MIN_REFETCH_MS = 2 * 3600e3; // CelesTrak aktualisiert alle 2 h – nicht öfter laden
 
 const FOLLOW_ICON = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M20 4 4 11l7 2 2 7z"/></svg>';
 
@@ -30,12 +25,8 @@ export function mount(body, ctx) {
   let startT = 0, firstFixMs = null, fixes = 0, last = null, lastSaved = 0;
   const accHist = [];
   let follow = load('gps:follow', true);
-  let mask = load('gps:mask', 5);
-  let hidden = new Set(load('gps:hide', []));
-  let orbits = loadOrbits();
-  let sats = buildSatrecs(orbits);
-  let loading = false;
-  const abort = new AbortController();
+  // Altdaten früherer Versionen (berechnete Satelliten) entfernen
+  for (const k of ['gps:orbits', 'gps:mask', 'gps:hide']) remove(k);
   const stored = load('gps:last', null);
 
   // ---------- Karte ----------
@@ -45,7 +36,6 @@ export function mount(body, ctx) {
   const map = mapApi.map;
   let marker = null, circle = null, lastTargetZoom = null;
   map.on('dragstart', () => setFollow(false));
-  map.on('moveend', () => { if (basis().src === 'Kartenmitte') updateSky(); });
 
   // ---------- Kopfleiste ----------
   const followBtn = h('button.icon-btn.gps-follow', { type: 'button', title: 'Karte folgen', 'aria-label': 'Karte folgen', html: FOLLOW_ICON, onclick: () => setFollow(!follow, true) });
@@ -80,57 +70,19 @@ export function mount(body, ctx) {
   const sCourse = stat('Kurs');
   const sSpeed = stat('Geschwindigkeit');
   const sTime = stat('Zeit des Fixes');
-  const sSats = stat('Satelliten (ber.)');
+  const sAge = stat('Alter des Fixes');
   body.append(
-    h('div.stats.gps-blk', sPos.el, sAcc.el, sAlt.el, sCourse.el, sSpeed.el, sTime.el, sSats.el),
+    h('div.stats.gps-blk', sPos.el, sAcc.el, sAlt.el, sCourse.el, sSpeed.el, sTime.el, sAge.el),
     h('p.gps-note.small.muted.gps-blk', 'Höhe: so wie vom Gerät geliefert. iOS gibt Höhe über dem Meeresspiegel an, andere Plattformen teils über dem WGS84-Ellipsoid (in Deutschland rund 40–50 m mehr). Kurs und Geschwindigkeit nur in Bewegung.')
   );
 
-  // ---------- Himmel (berechnet) ----------
-  const counts = h('div.gps-counts');
-  const skyBox = h('div.gps-sky');
-  const skyBasis = h('div.small.muted.gps-basis');
-  const skyDop = h('div.gps-dop');
-  const skyWarn = h('div.banner.warn', { hidden: true });
-  const maskSeg = seg([0, 5, 10, 15].map(v => ({ value: String(v), label: v + '°' })), String(mask), v => {
-    mask = Number(v); save('gps:mask', mask); updateSky();
-  });
-  const listBody = h('tbody');
-  const listSum = h('summary', 'Liste');
-  const details = h('details.gps-details', listSum,
-    h('table.table', h('thead', h('tr', h('th', 'System'), h('th', 'Satellit'), h('th.r', 'Azimut'), h('th.r', 'Höhe'))), listBody));
+  // ---------- Hinweise ----------
   body.append(
-    h('div.section-title', 'Satelliten'),
-    h('div.card.gps-blk',
-      h('div.card-title', 'Über dem Horizont · berechnet'),
-      h('p.gps-honest.small.muted', 'Aus Bahndaten berechnet, welche Satelliten am Standort über dem Horizont stehen. Welche das Gerät tatsächlich empfängt, gibt der Browser nicht preis. System antippen blendet es im Diagramm aus.'),
-      skyWarn, counts, skyBox, skyBasis, skyDop,
-      h('div.gps-mask', h('span.small.muted', 'Elevationsmaske'), maskSeg),
-      details)
-  );
-
-  // ---------- Bahndaten ----------
-  const orbitRows = {};
-  const orbitList = h('div.list.gps-orbits');
-  for (const s of SYSTEMS) {
-    const v = h('div.v.small');
-    const pb = h('div.progress.gps-row-bar', { hidden: true }, h('i'));
-    const row = h('div.list-row.gps-orow', h('div.gps-orow-k', svg(legendIcon(s.key)), h('span', s.name)), h('div.gps-orow-v', v, pb));
-    orbitRows[s.key] = { v, pb };
-    orbitList.append(row);
-  }
-  const loadBar = h('div.progress', { hidden: true }, h('i'));
-  const loadT = h('div.small.muted', { hidden: true });
-  const loadBtn = h('button.btn.block', { type: 'button', onclick: () => loadOrbitsNow(true) });
-  body.append(
-    h('div.section-title', 'Bahndaten'),
-    h('div.card.gps-ocard.gps-blk',
-      h('div.card-title', 'CelesTrak · offline gespeichert'),
-      orbitList, loadBar, loadT, loadBtn,
-      h('p.small.muted.gps-p', 'Dienen nur der Berechnung oben. Die Position selbst bestimmt der GNSS-Empfänger des Geräts – ohne Internet lädt er die Bahndaten (Ephemeriden) direkt aus dem Satellitensignal. Ein solcher Kaltstart dauert 30 s bis etwa 12 Minuten; freie Sicht zum Himmel hilft.')),
+    h('div.banner.gps-blk', 'Satellitenanzahl und Rohdaten: vom iPhone nicht zugänglich (auch nicht für native Apps).'),
     h('div.card.gps-blk',
       h('div.card-title', 'Ortung ohne Netz'),
-      h('p.small.muted.gps-p', 'Für eine grobe 2D-Position genügen dem Empfänger 3 Satelliten, für 3D mit Höhe 4. Jeder Fix wird gezeigt, auch ein grober – die Genauigkeit (blauer Kreis) wird mit mehr Satelliten und der Zeit besser. Satellitenanzahl und Signalstärken liefert der Browser nicht; angezeigt wird die berechnete Sichtbarkeit.'))
+      h('p.small.muted.gps-p', 'Die Position kommt vom GNSS-Empfänger des Geräts, nicht aus dem Internet. Ohne Netz fehlen Hilfsdaten; der erste Fix kann dann deutlich länger dauern, mitunter einige Minuten. Freie Sicht zum Himmel hilft.'),
+      h('p.small.muted.gps-p', 'Jeder Fix wird gezeigt, auch ein grober. Der Kreis um den Punkt entspricht der vom Gerät gemeldeten Genauigkeit.'))
   );
 
   // ---------- Logik: Position ----------
@@ -161,7 +113,6 @@ export function mount(body, ctx) {
     fixes++;
     errBanner.hidden = true;
     clearTimeout(restartTimer);
-    const prevT = last ? last.t : 0;
     last = {
       lat: c.latitude, lon: c.longitude, acc: Number.isFinite(c.accuracy) ? c.accuracy : NaN,
       alt: c.altitude, altAcc: c.altitudeAccuracy, heading: c.heading, speed: c.speed,
@@ -186,7 +137,6 @@ export function mount(body, ctx) {
       save('gps:last', { lat: last.lat, lon: last.lon, alt: last.alt, acc: last.acc, t: last.t });
       lastSaved = now;
     }
-    if (!prevT) updateSky();
     render();
   }
 
@@ -244,7 +194,7 @@ export function mount(body, ctx) {
     } else if (!last) {
       headT.textContent = 'Suche Position · ' + fmtDuration(now - startT);
       headSub.textContent = now - startT > 15000
-        ? 'Ohne Internet startet der Empfänger kalt: 30 s bis etwa 12 min. Freie Sicht zum Himmel hilft.'
+        ? 'Ohne Netz kann der erste Fix deutlich länger dauern. Freie Sicht zum Himmel hilft.'
         : 'Warte auf den ersten Fix des Empfängers …';
     } else if (!running) {
       headT.textContent = 'Angehalten';
@@ -298,10 +248,12 @@ export function mount(body, ctx) {
       else sCourse.set('–', '');
       sSpeed.set(Number.isFinite(last.speed) && last.speed !== null ? fmt(last.speed * 3.6, 1) : '–', 'km/h');
       sTime.set(new Date(last.t).toLocaleTimeString('de-DE'), '');
+      const ageMs = Math.max(0, now - last.t);
+      if (ageMs < 60000) sAge.set(String(Math.round(ageMs / 1000)), 's');
+      else sAge.set(fmtDuration(ageMs), ageMs < 3600e3 ? 'min' : 'h');
     } else {
-      sPos.set('–'); sAcc.set('–', 'm'); sAlt.set('–', 'm'); sCourse.set('–', ''); sSpeed.set('–', 'km/h'); sTime.set('–', '');
+      sPos.set('–'); sAcc.set('–', 'm'); sAlt.set('–', 'm'); sCourse.set('–', ''); sSpeed.set('–', 'km/h'); sTime.set('–', ''); sAge.set('–', '');
     }
-    renderOrbits();
   }
 
   function trendText() {
@@ -313,196 +265,17 @@ export function mount(body, ctx) {
     return ' · stabil';
   }
 
-  // ---------- Himmel (berechnet) ----------
-  function basis() {
-    if (last) return { lat: last.lat, lon: last.lon, alt: last.alt, src: Date.now() - last.rx < 120000 ? 'aktuelle Position' : 'letzter Fix' };
-    if (stored) return { lat: stored.lat, lon: stored.lon, alt: stored.alt, src: 'letzte bekannte Position', t: stored.t };
-    const c = map.getCenter();
-    return { lat: c.lat, lon: c.lng, alt: 0, src: 'Kartenmitte' };
-  }
-
-  let skyList = [];
-  function updateSky() {
-    const b = basis();
-    const now = new Date();
-    if (!sats.length) {
-      skyList = [];
-      skyBox.innerHTML = skyplotSVG([], mask);
-      counts.replaceChildren();
-      skyWarn.hidden = false;
-      skyWarn.textContent = 'Noch keine Bahndaten gespeichert. Einmal mit Internet laden (unten), danach offline nutzbar.';
-      skyBasis.textContent = '';
-      skyDop.textContent = '';
-      sSats.set('–', '');
-      listBody.replaceChildren();
-      listSum.textContent = 'Liste';
-      return;
-    }
-    const all = lookAngles(sats, b.lat, b.lon, Number.isFinite(b.alt) && b.alt !== null ? b.alt : 0, now);
-    skyList = all.filter(s => s.el >= 0);
-    const vis = all.filter(s => s.el >= mask);
-    skyBox.innerHTML = skyplotSVG(skyList.filter(s => !hidden.has(s.sys)), mask);
-
-    counts.replaceChildren(...SYSTEMS.map(s => {
-      const has = orbits[s.key] && orbits[s.key].list && orbits[s.key].list.length;
-      const n = vis.filter(v => v.sys === s.key).length;
-      const off = hidden.has(s.key);
-      return h('button.gps-count', {
-        type: 'button', class: off ? 'is-off' : '', 'aria-pressed': String(!off),
-        title: off ? s.name + ' im Diagramm zeigen' : s.name + ' im Diagramm ausblenden',
-        onclick: () => {
-          if (hidden.has(s.key)) hidden.delete(s.key); else hidden.add(s.key);
-          save('gps:hide', [...hidden]);
-          updateSky();
-        }
-      }, h('div.gps-count-k', svg(legendIcon(s.key)), h('span', s.name)), h('div.gps-count-v', has ? String(n) : '–'));
-    }));
-    sSats.set(String(vis.length), `über ${mask}°`);
-
-    const posTxt = fmtLatLon(b.lat, b.lon, 3);
-    skyBasis.textContent = `Für ${b.src} (${posTxt}) · ${now.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })} Uhr · Maske ${mask}°`;
-
-    const dGps = dop(vis.filter(v => v.sys === 'gps'));
-    const dAll = dop(vis);
-    const enough = vis.length >= 4;
-    const dopTxt = d => (d ? `PDOP ${fmt(d.pdop, 1)} · HDOP ${fmt(d.hdop, 1)}` : 'zu wenige');
-    skyDop.replaceChildren(
-      h('div.gps-dop-row', h('span.muted', 'Geometrie nur GPS'), h('span.num', dopTxt(dGps))),
-      h('div.gps-dop-row', h('span.muted', 'Geometrie alle Systeme'), h('span.num', dopTxt(dAll))),
-      h('div.small.muted', enough
-        ? `${vis.length} berechnet sichtbar – mindestens 4 nötig für 3D, 3 für 2D. DOP gilt, falls alle empfangen werden (kleiner = besser).`
-        : `Nur ${vis.length} berechnet sichtbar – für 3D sind 4 nötig, 3 reichen für eine grobe 2D-Position.`)
-    );
-
-    // Warnung bei alten Bahndaten
-    const old = SYSTEMS.filter(s => {
-      const e = orbits[s.key] && epochInfo(orbits[s.key].list);
-      return e && ageDays(e.median) > STALE_DAYS;
-    });
-    skyWarn.hidden = !old.length;
-    if (old.length) skyWarn.textContent = `Bahndaten (${old.map(s => s.name).join(', ')}) älter als ${STALE_DAYS} Tage – Stände ungenauer, Sichtbarkeit meist noch brauchbar. Online aktualisieren.`;
-
-    const sorted = [...vis].sort((a, c) => c.el - a.el);
-    listSum.textContent = `Liste (${sorted.length})`;
-    listBody.replaceChildren(...sorted.map(s => h('tr',
-      h('td', h('span.gps-li', svg(legendIcon(s.sys)), SYSTEMS.find(x => x.key === s.sys).name)),
-      h('td', { title: s.name }, s.label),
-      h('td.r', fmt(s.az, 0) + '°'),
-      h('td.r', fmt(s.el, 0) + '°'))));
-  }
-
-  // ---------- Bahndaten laden ----------
-  const loadState = {};
-  function renderOrbits() {
-    const now = Date.now();
-    let any = false;
-    for (const s of SYSTEMS) {
-      const r = orbitRows[s.key];
-      const e = orbits[s.key];
-      const st = loadState[s.key];
-      let txt;
-      if (st && st.phase === 'load') txt = st.retry ? `Neuer Versuch (${st.attempt}) …` : `lädt … ${fmt((st.bytes || 0) / 1024, 0)} kB`;
-      else if (st && st.phase === 'wait') txt = 'wartet';
-      else if (st && st.phase === 'err' && !(e && e.list)) txt = 'Fehler: ' + st.msg;
-      else if (e && e.list) {
-        any = true;
-        const ei = epochInfo(e.list);
-        const d = ei ? ageDays(ei.median, now) : NaN;
-        txt = `${e.list.length} Sat. · ${fmtAge(d)}${d > STALE_DAYS ? ' · veraltet' : ''}`;
-        r.v.title = ei ? 'Bahnepoche (Median) ' + new Date(ei.median).toLocaleString('de-DE') + ', geladen ' + new Date(e.fetched).toLocaleString('de-DE') : '';
-        if (st && st.phase === 'err') txt += ' · Aktualisierung fehlgeschlagen';
-      } else txt = 'nicht geladen';
-      r.v.textContent = txt;
-      r.v.classList.toggle('gps-warn-t', !!(e && e.list && epochInfo(e.list) && ageDays(epochInfo(e.list).median, now) > STALE_DAYS));
-      r.pb.hidden = !(st && (st.phase === 'load' || st.phase === 'wait'));
-      if (!r.pb.hidden) {
-        r.pb.firstChild.style.width = st.phase === 'wait' ? '0%' : '';
-        r.pb.classList.toggle('gps-indet', st.phase === 'load');
-      }
-    }
-    if (loading) {
-      loadBtn.disabled = true;
-      loadBtn.textContent = 'Lädt …';
-    } else if (!navigator.onLine) {
-      loadBtn.disabled = true;
-      loadBtn.textContent = 'Offline – Laden nicht möglich';
-    } else {
-      loadBtn.disabled = false;
-      loadBtn.textContent = any ? 'Bahndaten aktualisieren' : 'Bahndaten laden';
-      loadBtn.classList.toggle('primary', !any);
-    }
-  }
-
-  async function loadOrbitsNow(manual) {
-    if (loading) return;
-    if (!navigator.onLine) { toast('Offline – Laden nicht möglich'); return; }
-    const now = Date.now();
-    const todo = SYSTEMS.filter(s => {
-      const e = orbits[s.key];
-      if (!e || !e.list) return true;
-      if (now - e.fetched < MIN_REFETCH_MS) return false;
-      if (manual) return true;
-      const ei = epochInfo(e.list);
-      return !ei || ageDays(ei.median, now) > AUTO_REFRESH_DAYS;
-    });
-    if (!todo.length) { if (manual) toast('Bahndaten sind aktuell (vor weniger als 2 h geladen)', 2400); return; }
-    loading = true;
-    for (const s of todo) loadState[s.key] = { phase: 'wait' };
-    loadBar.hidden = false; loadT.hidden = false;
-    let done = 0, ok = 0;
-    const step = () => {
-      loadBar.firstChild.style.width = (done / todo.length * 100).toFixed(0) + '%';
-      loadT.textContent = `${done} von ${todo.length} Konstellationen geladen`;
-    };
-    step();
-    renderOrbits();
-    for (const s of todo) {
-      if (abort.signal.aborted) return;
-      loadState[s.key] = { phase: 'load', bytes: 0, attempt: 1 };
-      loadT.textContent = `Lade ${s.name} … (${done + 1} von ${todo.length})`;
-      renderOrbits();
-      try {
-        const entry = await fetchGroup(s, p => {
-          loadState[s.key] = { phase: 'load', bytes: p.bytes, attempt: p.attempt, retry: p.retry };
-          renderOrbits();
-        }, abort.signal);
-        orbits[s.key] = entry;
-        delete loadState[s.key];
-        ok++;
-      } catch (e) {
-        if (abort.signal.aborted) return;
-        loadState[s.key] = { phase: 'err', msg: e.message || 'Netzwerk' };
-      }
-      done++;
-      step();
-      renderOrbits();
-    }
-    loading = false;
-    orbits = loadOrbits();
-    sats = buildSatrecs(orbits);
-    loadT.textContent = ok === todo.length ? `${ok} Konstellationen geladen und gespeichert` : `${ok} von ${todo.length} geladen – Rest später erneut versuchen`;
-    setTimeout(() => { if (!loading) { loadBar.hidden = true; loadT.hidden = true; } }, 4000);
-    renderOrbits();
-    updateSky();
-  }
-
   // ---------- Start ----------
-  const onNet = () => { render(); if (navigator.onLine) loadOrbitsNow(false); };
-  on(window, 'online', onNet);
-  on(window, 'offline', onNet);
+  on(window, 'online', render);
+  on(window, 'offline', render);
   const tick = setInterval(render, 1000);
-  const skyTick = setInterval(updateSky, 10000);
 
   setFollow(follow);
   render();
-  updateSky();
   start();
-  loadOrbitsNow(false);
 
   return () => {
-    abort.abort();
     clearInterval(tick);
-    clearInterval(skyTick);
     offs.forEach(f => f());
     stop();
     map.remove();
@@ -524,12 +297,6 @@ function convergence(acc) {
 }
 
 const fmtAcc = a => (a < 10 ? fmt(a, 1) : a < 10000 ? fmt(a, 0) : fmt(a / 1000, 0) + ' k') + ' m';
-
-function fmtAge(d) {
-  if (!Number.isFinite(d)) return '–';
-  if (d < 1) return `vor ${Math.max(1, Math.round(d * 24))} h`;
-  return `vor ${fmt(d, 0)} ${Math.round(d) === 1 ? 'Tag' : 'Tagen'}`;
-}
 
 function compass(deg) {
   const n = ['N', 'NO', 'O', 'SO', 'S', 'SW', 'W', 'NW'];
@@ -586,46 +353,8 @@ function injectStyle() {
 .gps-tap { cursor: pointer; }
 .gps-tap:active { background: var(--surface-2); }
 .gps-note { margin: -4px 4px 0; line-height: 1.4; }
-.gps-honest, .gps-p { margin: 0 0 10px; line-height: 1.4; }
+.gps-p { margin: 0 0 8px; line-height: 1.4; }
 .gps-p:last-child { margin-bottom: 0; }
-.gps-ocard { display: flex; flex-direction: column; gap: 10px; }
-.gps-ocard .gps-p { margin: 0; }
-.gps-counts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius-s); overflow: hidden; margin: 10px 0 4px; }
-.gps-counts:empty { display: none; }
-.gps-count { appearance: none; border: 0; background: var(--surface); padding: 8px 6px; text-align: center; min-width: 0; min-height: 56px; color: var(--text); transition: opacity .15s; }
-.gps-count:active { background: var(--surface-2); }
-.gps-count.is-off { opacity: .4; }
-.gps-count-k { display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 11px; color: var(--text-2); white-space: nowrap; }
-.gps-count-v { font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; margin-top: 2px; }
-.gps-sky { max-width: 340px; margin: 0 auto; width: 100%; }
-.gps-sky-svg { width: 100%; height: auto; display: block; overflow: visible; }
-.gps-grid { fill: none; stroke: var(--line-strong); stroke-width: 1; }
-.gps-grid-h { fill: var(--surface-2); stroke: var(--line-strong); stroke-width: 1.2; }
-.gps-grid-minor { stroke: var(--line); }
-.gps-grid-mask { stroke-dasharray: 3 3; stroke: var(--text-3); }
-.gps-grid-t { font-size: 9px; fill: var(--text-3); }
-.gps-dir { font-size: 12px; font-weight: 600; fill: var(--text-2); }
-.gps-sym-f { fill: var(--accent); stroke: var(--surface); stroke-width: 1; }
-.gps-sym-o { fill: var(--surface); stroke: var(--accent); stroke-width: 1.8; }
-.gps-sat.is-low { opacity: .35; }
-.gps-sat-t { font-size: 9px; fill: var(--text-2); font-variant-numeric: tabular-nums; }
-.gps-basis { text-align: center; margin-top: 4px; }
-.gps-dop { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
-.gps-dop-row { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; }
-.gps-dop-row .num { text-align: right; }
-.gps-mask { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
-.gps-mask .seg { flex: 0 1 220px; }
-.gps-details { margin-top: 12px; }
-.gps-details summary { cursor: pointer; color: var(--accent); font-size: 15px; padding: 8px 0; min-height: 36px; }
-.gps-details .table { margin-top: 4px; }
-.gps-details .table .r, .gps-details th.r { text-align: right; }
-.gps-li { display: inline-flex; align-items: center; gap: 6px; }
-.gps-orbits .list-row { align-items: flex-start; }
-.gps-orow-k { display: flex; align-items: center; gap: 8px; flex: none; padding-top: 1px; }
-.gps-orow-v { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 0; text-align: right; }
-.gps-orow-v .v { color: var(--text-2); }
-.gps-row-bar { width: 120px; }
-.gps-warn-t { color: var(--danger) !important; }
 .gps-stale { opacity: .45; }
 .gps-acc-coarse { stroke-dasharray: 6 5; }
 @media (prefers-reduced-motion: reduce) { .gps-dot.is-search, .progress.gps-indet > i { animation: none; } }
