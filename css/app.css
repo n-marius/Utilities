@@ -157,6 +157,7 @@ button { cursor: pointer; }
   padding: 16px calc(var(--safe-r) + 16px) calc(var(--safe-b) + 28px) calc(var(--safe-l) + 16px);
   display: flex; flex-direction: column; gap: 16px;
 }
+.tool-body > * { flex-shrink: 0; }
 .tool-body.is-flush { padding: 0; gap: 0; }
 
 /* ===== Bausteine ===== */

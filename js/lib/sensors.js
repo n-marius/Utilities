@@ -13,14 +13,16 @@ let permissionGranted = false;
 export async function ensureMotionPermission() {
   if (permissionGranted) return true;
   try {
+    // Beide Anfragen sofort (ohne await dazwischen) starten, sonst verwirft iOS die zweite als nicht nutzerausgelöst.
+    const reqs = [];
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-      const r = await DeviceOrientationEvent.requestPermission();
-      if (r !== 'granted') return false;
+      reqs.push(DeviceOrientationEvent.requestPermission());
     }
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-      const r = await DeviceMotionEvent.requestPermission();
-      if (r !== 'granted') return false;
+      reqs.push(DeviceMotionEvent.requestPermission());
     }
+    const res = await Promise.all(reqs);
+    if (res.some(r => r !== 'granted')) return false;
     permissionGranted = true;
     return true;
   } catch (e) {
