@@ -10,15 +10,15 @@ Offline-fähige Web-App (PWA) mit fünf Werkzeugen: Höhenmesser, GPS (offline),
    (GitHub Pages für private Repositories setzt ein kostenpflichtiges GitHub-Konto voraus.)
 2. Adresse in **Safari** öffnen → Teilen-Symbol → **Zum Home-Bildschirm**.
 3. App einmal online starten; danach ist sie vollständig offline nutzbar.
-4. Für Offline-Karten: Kartenausschnitt online ansehen oder mit dem Download-Knopf auf der Karte speichern (bis 250 Kacheln je Vorgang; die Kachelserver untersagen Massen-Downloads).
-5. Für die Satellitenberechnung im GPS-Werkzeug einmal online „Bahndaten laden“.
+4. Karten: Offline zeigt jede Karte eine eingebaute Grundkarte (Natural Earth: Länder, Grenzen, Gewässer, größere Orte, Gradnetz). Detailkarten (OpenStreetMap) sind offline verfügbar, wenn der Ausschnitt vorher online angesehen oder mit dem Download-Knopf gespeichert wurde (bis 250 Kacheln je Vorgang; die Kachelserver untersagen Massen-Downloads).
+5. what3words (Koordinaten-Werkzeug): nur online und mit eigenem API-Schlüssel von what3words.
 
 Berechtigungen: Standort (GPS, Inertialnavigation-Start, Koordinaten) und „Bewegung & Ausrichtung“ (Inertialnavigation, Sonnenortung) werden beim ersten Gebrauch abgefragt.
 
 ## Technische Grenzen (Browser)
 
 - **Luftdruck:** Safari/iOS gibt Web-Apps keinen Zugriff auf den Barometer. Der Höhenmesser nutzt einen Drucksensor nur, wenn der Browser einen anbietet; sonst manuelle Druckeingabe.
-- **GPS-Rohdaten:** Browser liefern keine Satellitenanzahl, Signalstärken oder Ephemeriden. Die Position berechnet der GNSS-Empfänger des Geräts (funktioniert offline). Die angezeigte Satellitenanzahl ist aus Bahndaten (CelesTrak) berechnet, nicht empfangen.
+- **GPS-Rohdaten:** Das iPhone gibt Satellitenanzahl, Signalstärken und Rohdaten weder an Web-Apps noch an native Apps heraus. Die Position berechnet der GNSS-Empfänger des Geräts.
 - **Hintergrund:** Bei gesperrtem Bildschirm liefert iOS keine Sensordaten; die Inertialnavigation pausiert.
 
 ## Entwicklung
@@ -27,4 +27,4 @@ Berechtigungen: Standort (GPS, Inertialnavigation-Start, Koordinaten) und „Bew
 - Nach Änderungen an Dateien: `node scripts/precache.js` (aktualisiert Offline-Dateiliste und Version im Service Worker).
 - Icons neu erzeugen: `node scripts/icons.js` (benötigt Playwright/Chromium).
 
-Drittsoftware: Leaflet (BSD-2), satellite.js (MIT), geomagnetism/WMM2025 (MIT/gemeinfrei). Kartendaten © OpenStreetMap-Mitwirkende, OpenTopoMap.
+Drittsoftware: Leaflet (BSD-2), geomagnetism/WMM2025 (MIT/gemeinfrei). Kartendaten © OpenStreetMap-Mitwirkende, OpenTopoMap; Grundkarte Natural Earth (gemeinfrei, `scripts/basemap-pack.py`).
