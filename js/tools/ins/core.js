@@ -18,10 +18,12 @@ export const wrap180 = a => { a = wrap360(a); return a > 180 ? a - 360 : a; };
 
 /** Annahmen der Fehlerschätzung (keine Messwerte). */
 export const ASSUME = {
-  stepScale: 0.03,      // Schrittlängenfehler: 3 % der Strecke
+  stepScale: 0.03,      // Schrittlängenfehler: 3 % je zurückgelegtem Meter (kalibrierte Schrittlänge vorausgesetzt)
   headingErr0: 5,       // Startkursfehler (Grad), falls keine Angabe
-  gyroDrift: 0.5,       // Kursdrift (Grad/min)
-  accelBias: 0.02       // Restfehler Beschleunigung b (m/s²) für Strapdown: 0,5·b·t²
+  driftMove: 0.5,       // Kursdrift der Gyro-Fusion bei Bewegung (Grad/min)
+  driftRest: 0.1,       // Kursdrift in Ruhe (Grad/min); das System schätzt den Gyro-Bias im Stillstand nach
+  biasInst: 0.01,       // Rest-Bias nach Kalibrierung (m/s²): Bias-Instabilität und Schwerkraftleck bei Lageänderung
+  accelBias: 0.02       // b ohne Kalibrierung (m/s²)
 };
 
 /**
@@ -175,16 +177,51 @@ export class AccelBias {
 }
 
 /**
- * Fehlerradius (m), grobe Schätzung.
- * Schritte:   e0 + 3 %·s + s·sin(ψ0 + Drift·t)
- * Strapdown:  e0 + 0,5·b·t² + s·sin(ψ0 + Drift·t)
- * e0 Startunsicherheit (m), s Strecke (m), t Laufzeit (s), ψ0 Startkursfehler (Grad).
+ * b (m/s²) nach Kalibrierung: Unsicherheit des Mittelwerts (σ/√n) und angenommener
+ * Rest-Bias (Instabilität, Schwerkraftleck durch Lagefehler nach Drehen/Neigen) quadratisch addiert.
  */
-export function errorRadius({ method, e0 = 0, dist = 0, t = 0, psi0 = ASSUME.headingErr0 }) {
-  const psi = Math.min(90, psi0 + ASSUME.gyroDrift * t / 60);
-  const head = dist * Math.sin(psi * D2R);
-  const own = method === 'strapdown' ? 0.5 * ASSUME.accelBias * t * t : ASSUME.stepScale * dist;
-  return e0 + own + head;
+export function biasUncertainty(spread, n) {
+  const sm = n > 0 && Number.isFinite(spread) ? spread / Math.sqrt(n) : ASSUME.accelBias;
+  return Math.hypot(sm, ASSUME.biasInst);
+}
+
+/**
+ * Fehlerradius (m), grobe Schätzung, schrittweise fortgeschrieben.
+ * Wächst nur durch Bewegung:
+ *   Schritte:  r = r₀ + Σ (3 % + sin ψ)·Δs
+ *   Strapdown: r = r₀ + Σ_Abschnitte ½·b·T² + Σ sin ψ·Δs
+ * T Dauer eines Bewegungsabschnitts; ein erkannter Stillstand (ZUPT) setzt die Geschwindigkeit
+ * auf 0 und schließt den Abschnitt (Restgeschwindigkeitsfehler damit beseitigt). Ohne ZUPT ist
+ * die ganze Laufzeit ein Abschnitt. ψ = ψ₀ + Drift_Bewegung·t_Bew + Drift_Ruhe·t_Ruhe.
+ */
+export class ErrorModel {
+  constructor({ method = 'strapdown', e0 = 0, psi0 = ASSUME.headingErr0, b = ASSUME.accelBias } = {}, state = null) {
+    Object.assign(this, { method, e0, psi0, b, segT: 0, segSum: 0, tMove: 0, tRest: 0, head: 0, scale: 0 }, state || {});
+  }
+  get psi() {
+    return Math.min(90, this.psi0 + (ASSUME.driftMove * this.tMove + ASSUME.driftRest * this.tRest) / 60);
+  }
+  /** dt Zeit (s), rest = Stillstand erkannt, ds zurückgelegte Strecke (m) seit dem letzten Aufruf. */
+  update(dt, rest, ds = 0) {
+    if (rest) { this.tRest += dt; this.closeSegment(); }
+    else { this.tMove += dt; this.segT += dt; }
+    if (ds > 0) {
+      this.head += ds * Math.sin(this.psi * Math.PI / 180);
+      this.scale += ASSUME.stepScale * ds;
+    }
+  }
+  /** Bewegungsabschnitt abschließen (Stillstand oder Pause mit v = 0). */
+  closeSegment() {
+    if (this.segT > 0) { this.segSum += 0.5 * this.b * this.segT * this.segT; this.segT = 0; }
+  }
+  get radius() {
+    const own = this.method === 'strapdown' ? this.segSum + 0.5 * this.b * this.segT * this.segT : this.scale;
+    return this.e0 + own + this.head;
+  }
+  toJSON() {
+    const { method, e0, psi0, b, segT, segSum, tMove, tRest, head, scale } = this;
+    return { method, e0, psi0, b, segT, segSum, tMove, tRest, head, scale };
+  }
 }
 
 /**

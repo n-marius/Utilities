@@ -9,26 +9,31 @@ import { h, svg } from './lib/ui.js';
 
 const stroke = 'fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"';
 
+export const TABS = [
+  { id: 'tools', title: 'Werkzeuge' },
+  { id: 'lab', title: 'Experimentell' }
+];
+
 export const TOOLS = [
   {
-    id: 'altimeter', title: 'Höhenmesser', sub: 'Barometrisch · hPa',
-    icon: `<svg viewBox="0 0 64 64" ${stroke}><circle cx="32" cy="32" r="25"/><path d="M32 11v4M53 32h-4M32 53v-4M11 32h4" stroke-width="2"/><path d="M32 32 43 17"/><path d="M32 32 22 40" stroke-width="4"/><circle cx="32" cy="32" r="2.6" fill="currentColor" stroke="none"/></svg>`
+    id: 'ins', tab: 'tools', title: 'Inertialnavigation', sub: 'Koppelnavigation',
+    icon: `<svg viewBox="0 0 64 64" ${stroke}><path d="M8 50C24 64 22 30 34 30S46 8 56 12"/><circle cx="8" cy="50" r="4" fill="currentColor" stroke="none"/><path d="M51.1 4.5 56 12l-8.8 2.1"/></svg>`
   },
   {
-    id: 'gps', title: 'GPS', sub: 'Offline · Satelliten',
-    icon: `<svg viewBox="0 0 64 64" ${stroke}><circle cx="32" cy="32" r="19" stroke-dasharray="4 5"/><circle cx="32" cy="32" r="6" fill="currentColor" stroke="none"/><path d="M32 5v9M32 50v9M5 32h9M50 32h9"/></svg>`
-  },
-  {
-    id: 'ins', title: 'Inertialnavigation', sub: 'Koppelnavigation',
-    icon: `<svg viewBox="0 0 64 64" ${stroke}><path d="M12 52c8 0 10-10 18-14s14-4 16-14" stroke-dasharray="1 6"/><circle cx="12" cy="52" r="4" fill="currentColor" stroke="none"/><path d="M38 14l13-4-4 13"/><path d="M51 10 40 21"/></svg>`
-  },
-  {
-    id: 'sunfix', title: 'Sonnenortung', sub: 'Position ohne GPS',
+    id: 'sunfix', tab: 'tools', title: 'Sonnenortung', sub: 'Position ohne GPS',
     icon: `<svg viewBox="0 0 64 64" ${stroke}><path d="M8 50h48"/><circle cx="42" cy="22" r="7"/><path d="M42 8v3M42 33v3M28 22h3M53 22h3M32 12l2 2M50 30l2 2M32 32l2-2M50 14l2-2" stroke-width="2"/><path d="M14 50 34 30"/><path d="M25 50a11 11 0 0 0-3-7.6" stroke-width="2"/></svg>`
   },
   {
-    id: 'coords', title: 'Koordinaten', sub: 'UTM · MGRS · Grad · Gauß-Krüger',
+    id: 'stars', tab: 'tools', title: 'Sternennavigation', sub: 'Sterne · Planeten',
+    icon: `<svg viewBox="0 0 64 64" ${stroke}><path d="M24 40 46 16 52 44Z" stroke-width="1.6" stroke-dasharray="2 4"/><path d="M24 25c1.5 8.5 5.5 12.5 14 14-8.5 1.5-12.5 5.5-14 14-1.5-8.5-5.5-12.5-14-14 8.5-1.5 12.5-5.5 14-14z" fill="currentColor" stroke="none"/><circle cx="46" cy="16" r="4" fill="currentColor" stroke="none"/><circle cx="52" cy="44" r="3" fill="currentColor" stroke="none"/></svg>`
+  },
+  {
+    id: 'coords', tab: 'tools', title: 'Koordinaten', sub: 'Umrechnung · 12 Formate',
     icon: `<svg viewBox="0 0 64 64" ${stroke}><circle cx="32" cy="32" r="23"/><ellipse cx="32" cy="32" rx="10" ry="23"/><path d="M9 32h46M13 20h38M13 44h38" stroke-width="2"/></svg>`
+  },
+  {
+    id: 'gravity', tab: 'lab', title: 'Gravitation', sub: 'Ortung über Erdschwere',
+    icon: `<svg viewBox="0 0 64 64" ${stroke}><circle cx="32" cy="15" r="7"/><path d="M32 27v19M25 40l7 7 7-7"/><path d="M12 54h40"/><path d="M16 59l4-5M26 59l4-5M36 59l4-5M46 59l4-5" stroke-width="1.8"/></svg>`
   }
 ];
 
@@ -45,12 +50,28 @@ window.addEventListener('online', updateFoot);
 window.addEventListener('offline', updateFoot);
 let navToken = 0;
 
+let activeTab = (() => { try { return sessionStorage.getItem('utilities:tab') || 'tools'; } catch { return 'tools'; } })();
+
+function renderTabs() {
+  const nav = document.querySelector('.tabs');
+  nav.textContent = '';
+  for (const t of TABS) {
+    const on = t.id === activeTab;
+    nav.append(h('button.tab', { type: 'button', role: 'tab', class: on ? 'is-active' : null, 'aria-selected': String(on),
+      onclick: () => {
+        activeTab = t.id;
+        try { sessionStorage.setItem('utilities:tab', t.id); } catch { /* egal */ }
+        renderTabs();
+        renderGrid();
+      } }, t.title));
+  }
+}
+
 function renderGrid() {
   const grid = $('grid');
   grid.textContent = '';
-  TOOLS.forEach((t, i) => {
-    const wide = TOOLS.length % 2 === 1 && i === TOOLS.length - 1;
-    const tile = h('button.tile', { type: 'button', class: wide ? 'wide' : null, onclick: () => { location.hash = '#/' + t.id; } },
+  TOOLS.filter(t => t.tab === activeTab).forEach(t => {
+    const tile = h('button.tile', { type: 'button', onclick: () => { location.hash = '#/' + t.id; } },
       h('span.tile-icon', svg(t.icon)),
       h('span.tile-text', h('span.tile-title', t.title), h('span.tile-sub', t.sub)));
     grid.append(tile);
@@ -106,6 +127,7 @@ $('back').addEventListener('click', () => {
 
 window.addEventListener('hashchange', route);
 // Modulskripte laufen nach dem Parsen des Dokuments (und nach den defer-Skripten davor).
+renderTabs();
 renderGrid();
 updateFoot();
 route();

@@ -140,10 +140,10 @@ button { cursor: pointer; }
   width: 64px; height: 64px; margin-bottom: 12px; border-radius: 50%;
   display: grid; place-items: center; color: var(--icon); background: var(--accent-soft);
 }
-.tile .tile-icon svg { width: 36px; height: 36px; }
+.tile .tile-icon svg { width: 40px; height: 40px; }
 .tile .tile-text { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
 .tile .tile-title { font-family: var(--font-display); font-size: 16px; font-weight: 600; letter-spacing: -.2px; }
-.tile .tile-sub { font-size: 12.5px; color: var(--text-2); letter-spacing: .1px; }
+.tile .tile-sub { font-size: 12.5px; color: var(--text-2); letter-spacing: .1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .tile.wide { grid-column: 1 / -1; aspect-ratio: auto; flex-direction: row; justify-content: flex-start; gap: 16px; padding: 18px; text-align: left; }
 .tile.wide .tile-icon { margin: 0; flex: none; }
 .tile.wide .tile-text { align-items: flex-start; }

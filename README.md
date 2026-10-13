@@ -1,6 +1,6 @@
 # Utilities
 
-Offline-fähige Web-App (PWA) mit fünf Werkzeugen: Höhenmesser, GPS (offline), Inertialnavigation, Sonnenortung, Koordinatenumrechnung. Kein Build-Schritt, keine Server-Komponente.
+Offline-fähige Web-App (PWA). Werkzeuge: Inertialnavigation, Sonnenortung, Sternennavigation, Koordinatenumrechnung. Experimentell: Ortung über die Erdschwere (Gravitation). Kein Build-Schritt, keine Server-Komponente.
 
 ## Installation auf dem iPhone
 
@@ -13,12 +13,12 @@ Offline-fähige Web-App (PWA) mit fünf Werkzeugen: Höhenmesser, GPS (offline),
 4. Karten: Offline zeigt jede Karte eine eingebaute Grundkarte (Natural Earth: Länder, Grenzen, Gewässer, größere Orte, Gradnetz). Detailkarten (OpenStreetMap) sind offline verfügbar, wenn der Ausschnitt vorher online angesehen oder mit dem Download-Knopf gespeichert wurde (bis 250 Kacheln je Vorgang; die Kachelserver untersagen Massen-Downloads).
 5. what3words (Koordinaten-Werkzeug): nur online und mit eigenem API-Schlüssel von what3words.
 
-Berechtigungen: Standort (GPS, Inertialnavigation-Start, Koordinaten) und „Bewegung & Ausrichtung“ (Inertialnavigation, Sonnenortung) werden beim ersten Gebrauch abgefragt.
+Berechtigungen: Standort (Start der Inertialnavigation, Kalibrierung Gravitation, Koordinaten) und „Bewegung & Ausrichtung“ (Inertialnavigation, Sonnen-/Sternennavigation, Gravitation) werden beim ersten Gebrauch abgefragt.
 
 ## Technische Grenzen (Browser)
 
-- **Luftdruck:** Safari/iOS gibt Web-Apps keinen Zugriff auf den Barometer. Der Höhenmesser nutzt einen Drucksensor nur, wenn der Browser einen anbietet; sonst manuelle Druckeingabe.
-- **GPS-Rohdaten:** Das iPhone gibt Satellitenanzahl, Signalstärken und Rohdaten weder an Web-Apps noch an native Apps heraus. Die Position berechnet der GNSS-Empfänger des Geräts.
+- **Luftdruck, Magnetfeld:** Safari/iOS gibt Web-Apps weder Barometer- noch Magnetometer-Rohwerte (nur die Kompassrichtung). Höhenmesser und Magnetfeld-Ortung sind daher nicht enthalten.
+- **GPS-Rohdaten:** Das iPhone gibt Satellitenanzahl, Signalstärken und Rohdaten weder an Web-Apps noch an native Apps heraus; auch der Fortschritt bis zum ersten Fix ist nicht abfragbar. Ein eigenes GPS-Werkzeug ist daher nicht enthalten.
 - **Hintergrund:** Bei gesperrtem Bildschirm liefert iOS keine Sensordaten; die Inertialnavigation pausiert.
 
 ## Entwicklung

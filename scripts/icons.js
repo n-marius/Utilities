@@ -26,8 +26,8 @@ function iconSVG({ rounded = true, scale = 1 } = {}) {
     <line x1="${t(372, cx)}" y1="${cy}" x2="${t(390, cx)}" y2="${cy}"/>
   </g>
   <line x1="${t(140, cx)}" y1="${t(214, cy)}" x2="${t(372, cx)}" y2="${t(214, cy)}" stroke="#f4f5fb" stroke-opacity=".45" stroke-width="${10 * s}" stroke-linecap="round"/>
-  <path d="M${cx} ${t(160, cy)} L${t(300, cx)} ${cy} L${cx} ${cy} Z" fill="url(#needle)"/>
-  <path d="M${cx} ${t(160, cy)} L${t(212, cx)} ${cy} L${cx} ${cy} Z" fill="#f4f5fb"/>
+  <path d="M${cx} ${t(160, cy)} L${t(300, cx)} ${cy} L${cx} ${cy} Z" fill="#c62a22"/>
+  <path d="M${cx} ${t(160, cy)} L${t(212, cx)} ${cy} L${cx} ${cy} Z" fill="#e8463a"/>
   <path d="M${t(212, cx)} ${cy} L${t(300, cx)} ${cy} L${cx} ${t(352, cy)} Z" fill="#f4f5fb" fill-opacity=".42"/>
   <circle cx="${cx}" cy="${cy}" r="${9 * s}" fill="#1c4ba3" stroke="#f4f5fb" stroke-width="${5 * s}"/>
 </svg>`;

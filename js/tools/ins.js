@@ -9,7 +9,7 @@ import { offsetEN, distance } from '../lib/geo.js';
 import { createMap, posMarker, accuracyCircle, trackLine } from '../lib/map.js';
 import { declination, magToTrue } from '../lib/magdecl.js';
 import { load, save, remove } from '../lib/store.js';
-import { ASSUME, AccelBias, StepDetector, Strapdown, forwardHeading, headingFromEuler, alphaOffset, toENU, errorRadius, parseLatLon, parseDeg, wrap360 } from './ins/core.js';
+import { ASSUME, AccelBias, StepDetector, Strapdown, forwardHeading, headingFromEuler, alphaOffset, toENU, ErrorModel, biasUncertainty, parseLatLon, parseDeg, wrap360 } from './ins/core.js';
 
 const CFG_KEY = 'ins:cfg';
 const RUN_KEY = 'ins:run';
@@ -102,7 +102,7 @@ export function mount(body, ctx) {
   let lastMotionT = null, tickPrev = null;
   let motionCount = 0, relCount = 0, motionHz = 0, relHz = 0, rateT = performance.now();
   let noLinAcc = false, warnBg = false, linOk = 0, linNull = 0;
-  let calibHeading = null;
+  let calibHeading = null, em = null;
   let bias = new AccelBias(), unCalib = null, calibTimer = null, calibT0 = 0;
   let follow = true, saveT = 0, hasLast = !!load(LAST_KEY, null);
 
@@ -208,13 +208,14 @@ export function mount(body, ctx) {
 
   const runList = h('div.list');
   const formula = h('div.ins-formula',
-    h('div', 'Schritte:  r = r₀ + 3 %·s + s·sin ψ'),
-    h('div', 'Strapdown: r = r₀ + ½·b·t² + s·sin ψ'),
-    h('div', `ψ = ψ₀ + ${fmt(ASSUME.gyroDrift, 1)}°/min·t, b = ${fmt(ASSUME.accelBias, 2)} m/s²`));
+    h('div', 'Inertial: r = r₀ + Σ½·b·T² + Σ sin ψ·Δs'),
+    h('div', 'Schritte: r = r₀ + Σ (3 % + sin ψ)·Δs'),
+    h('div', `ψ = ψ₀ + ${fmt(ASSUME.driftMove, 1)}°/min·t_Bew + ${fmt(ASSUME.driftRest, 1)}°/min·t_Ruhe`),
+    h('div', `b = √((σ/√n)² + ${fmt(ASSUME.biasInst, 2)}²) m/s²`));
   const estCard = h('div.card.ins-gap',
     h('div.card-title', 'Fehlerradius (Schätzung)'),
     formula,
-    h('p.ins-note', `r₀ Startunsicherheit (GPS-Genauigkeit, manuell 0 m), ψ₀ Startkursfehler (Kompassgenauigkeit, sonst ${ASSUME.headingErr0}°), angenommene Kursdrift ${fmt(ASSUME.gyroDrift, 1)}°/min, s Strecke, t Laufzeit. Annahmen, keine Messwerte.`)
+    h('p.ins-note', `Der Kreis wächst nur bei Bewegung. T Dauer je Bewegungsabschnitt – ein erkannter Stillstand (ZUPT) beendet ihn; ohne ZUPT zählt die ganze Laufzeit. Δs zurückgelegte Strecke, r₀ Startunsicherheit (GPS-Genauigkeit, manuell 0 m), ψ₀ Startkursfehler (Kompassgenauigkeit, sonst ${ASSUME.headingErr0}°), σ und n aus der Kalibrierung, ${fmt(ASSUME.biasInst, 2)} m/s² angenommener Rest-Bias (Instabilität, Schwerkraftleck beim Drehen/Neigen). Drift- und Bias-Werte sind Annahmen, keine Messwerte.`)
   );
   const hint = h('p.ins-note', 'Sensordaten gibt es nur bei geöffneter App und entsperrtem Bildschirm (iOS). Beim Verlassen des Werkzeugs wird angehalten; der Verlauf bleibt gespeichert, läuft aber nicht im Hintergrund weiter.');
 
@@ -409,10 +410,12 @@ export function mount(body, ctx) {
       v: 1, method: cfg.method, stepLen: cfg.stepLen, created: Date.now(), start: sp,
       E: 0, N: 0, dist: 0, steps: 0, tRun: 0, heading: sp.heading, err: sp.e0, speedNow: 0,
       relSrc: !haveRel ? 'none' : r0.abs ? 'abs' : 'rel',
-      bias: cfg.method === 'strapdown' ? { mag: bias.magnitude, spread: bias.spread, n: bias.n } : null, track: [[sp.lat, sp.lon]]
+      bias: cfg.method === 'strapdown' ? { mag: bias.magnitude, spread: bias.spread, n: bias.n, b: biasUncertainty(bias.spread, bias.n) } : null, track: [[sp.lat, sp.lon]]
     };
     det = new StepDetector();
     sd = new Strapdown({ zupt: cfg.zupt });
+    em = new ErrorModel({ method: cfg.method, e0: sp.e0, psi0: sp.psi0, b: run.bias ? run.bias.b : ASSUME.accelBias });
+    run.em = em;
     lastHeading = sp.heading;
     noLinAcc = false; warnBg = false; note = ''; linOk = 0; linNull = 0;
     follow = true;
@@ -473,6 +476,7 @@ export function mount(body, ctx) {
 
   function pause(reason) {
     if (state !== 'running') return;
+    if (em) em.closeSegment();          // Fortsetzen beginnt mit v = 0
     endMotion();
     state = 'paused';
     if (reason) { note = reason; warnBg = true; }
@@ -537,6 +541,7 @@ export function mount(body, ctx) {
         run.E += L0 * Math.sin(hd * Math.PI / 180);
         run.N += L0 * Math.cos(hd * Math.PI / 180);
         run.dist += L0;
+        if (em) em.update(0, false, L0);
         run.steps++;
         addTrackPoint(0);
       }
@@ -550,7 +555,9 @@ export function mount(body, ctx) {
       const [aE, aN] = toENU(R, x, y, z);
       sd.push(t, dt, aE, aN, Math.hypot(x, y, z));
       if (sd.still) bias.adapt(a.x, a.y, a.z, dt);   // Bias im Stillstand nachführen
+      const ds = sd.dist - run.dist;
       run.E = sd.pE; run.N = sd.pN; run.dist = sd.dist; run.speedNow = sd.speed;
+      if (em) em.update(dt, sd.zupt && sd.still, ds);
       addTrackPoint(0.5);
     }
   }
@@ -671,7 +678,7 @@ export function mount(body, ctx) {
       const hd = state === 'ended' ? run.heading : currentHeading();
       if (state !== 'ended' && hd != null) run.heading = hd;
       const tS = run.tRun / 1000;
-      run.err = errorRadius({ method: run.method, e0: run.start.e0, dist: run.dist, t: tS, psi0: run.start.psi0 });
+      if (em && state !== 'ended') run.err = em.radius;
       sKurs.set(fmtDeg(hd), 'rw');
       sErr.set(fmtErr(run.err));
       sDist.set(fmtDist(run.dist));
@@ -716,6 +723,8 @@ export function mount(body, ctx) {
     const rows = [
       ['Verfahren', run.method === 'steps' ? `Schritte à ${fmt(run.stepLen, 2)} m` : 'Inertial (Strapdown)' + (cfg.zupt ? ' + ZUPT' : '')],
       run.bias && ['Bias (Start)', `${fmt(run.bias.mag, 3)} m/s² · Streuung ${fmt(run.bias.spread, 3)}`],
+      run.bias && run.bias.b && ['b (Annahme)', `${fmt(run.bias.b, 3)} m/s²`],
+      run.em && ['Bewegt / Ruhe', `${fmtDuration((run.em.tMove || 0) * 1000)} / ${fmtDuration((run.em.tRest || 0) * 1000)} · ψ ±${fmt(em ? em.psi : (run.em.psi0 || 0), 1)}°`],
       ['Start', s.src === 'gps' ? `GPS ±${fmt(s.e0, 0)} m` : (s.e0 ? `manuell ±${fmt(s.e0, 0)} m` : 'manuell')],
       ['Startkurs', `${fmtDeg(s.heading)} rw` + (s.src === 'gps' ? ` (magn. ${fmtDeg(s.mag)}, Missw. ${fmtSigned(s.decl)})` : '') + ` ±${fmt(s.psi0, 0)}°`],
       ['Kursquelle', { rel: 'Lage relativ (Gyro)', abs: 'Lage (vom Browser absolut)', none: 'keine – Kurs konstant' }[run.relSrc] || '–']
