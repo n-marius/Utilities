@@ -1,16 +1,21 @@
-// Ortsbestimmung aus Sonnenpeilungen (Höhe + magnetischer Azimut), ohne DOM.
+// Ortsbestimmung aus Peilungen von Sonne, Sternen und Planeten (Höhe + magnetischer Azimut), ohne DOM.
 //
-// Modell je Messung i: Zeitpunkt t_i (UTC), scheinbare Höhe h_i, magnetischer Azimut Z_i,
-// Fehlergrenzen eh_i/eZ_i. Unbekannte: Breite, Länge und je nach Datenlage
+// Modell je Messung i: Körper (bodies.js), Zeitpunkt t_i (UTC), scheinbare Höhe h_i, magnetischer
+// Azimut Z_i, Fehlergrenzen eh_i/eZ_i (= 0,5° + Sensor, als harte Grenzen verstanden).
+// Unbekannte: Breite, Länge und je nach Datenlage
 //  - dt: gemeinsamer Uhrversatz (h) der Zeilen ohne Uhrzeit, falls andere Zeilen eine Uhrzeit haben,
 //  - D:  gemeinsamer Datumsversatz (Tage) der Zeilen ohne Datum,
 //  - m:  Missweisung als Unbekannte, wenn keine Zeile eine Uhrzeit hat (Länge dann unbestimmbar,
 //        Missweisung also nicht aus dem Modell ablesbar) – mit schwacher Vorgabe aus WMM entlang der Breite.
-// Residuen: (h_ber − h_wahr)/eh und Winkeldiff(Z_ber − (Z_mag + Missweisung))/eZ,
-// gelöst mit Levenberg-Marquardt (numerische Jacobi-Matrix) nach Grobsuche über Startwerte.
+// Residuen: (h_ber − h_wahr)/eh und Winkeldiff(Z_ber − (Z_mag + Missweisung))/eZ.
+// 1) solve(): Kandidaten = lokale Minima der Fehlerquadratsumme (Levenberg-Marquardt nach Grobsuche).
+// 2) analyze(): Mengen-Ansatz. Lösungsbereich = alle Orte, an denen JEDE Messung innerhalb ihrer
+//    Grenze erfüllt ist (max |r_i| ≤ 1). Bestimmt per Monte Carlo (Störung innerhalb der Grenzen,
+//    nur zulässige Lösungen bleiben) plus Gitterprüfung um jeden Kandidaten. Leere Menge = widersprüchlich.
 
-import { sunGP, altAzFromLHA, apparentToTrue } from './sun.js';
-import { distance } from '../../lib/geo.js';
+import { altAzFromLHA, apparentToTrue } from './sun.js';
+import { bodyGP } from './bodies.js';
+import { distance, destination } from '../../lib/geo.js';
 
 const D2R = Math.PI / 180;
 const R2D = 180 / Math.PI;
@@ -29,7 +34,7 @@ export function rowToObs(row) {
   if (row.time) { const m = row.time.split(':').map(Number); H = m[0]; Mi = m[1] || 0; S = m[2] || 0; ms = 0; }
   return {
     t: new Date(y, mo, d, H, Mi, S, ms).getTime(),
-    hasDate: !!row.date, hasTime: !!row.time,
+    hasDate: !!row.date, hasTime: !!row.time, body: row.body || 'sun',
     h: row.h, az: row.az, eh: row.eh, eZ: row.eZ
   };
 }
@@ -117,13 +122,13 @@ function declOf(p, L, ctx) {
   return L.mFree ? p[L.iM] : ctx.table.at(p[0], p[1]) + ctx.corr;
 }
 
-function residuals(p, data, L, ctx) {
+function residualsRaw(p, data, L, ctx) {
   const out = new Float64Array(L.nRes);
   const decl = declOf(p, L, ctx);
   let k = 0;
   for (const o of data) {
     const { t, ghaShift } = obsTime(o, p, L);
-    const gp = sunGP(t);
+    const gp = bodyGP(o.body, t);
     const r = altAzFromLHA(p[0], gp.dec, gp.gha - ghaShift + p[1]);
     out[k++] = (r.alt - o.hTrue) / o.eh;
     out[k++] = wrap180(r.az - (o.az + decl)) / o.eZ;
@@ -143,6 +148,7 @@ function normalize(p, L) {
   return p;
 }
 
+const residuals = residualsRaw;
 const ssq = r => { let s = 0; for (const x of r) s += x * x; return s; };
 
 function stepOf(L, i) {
@@ -175,8 +181,12 @@ function solveLin(A, b) {
   return x;
 }
 
-/** Levenberg-Marquardt. Gibt {p, cost} zurück. */
-function lm(p0, data, L, ctx, maxIt = 60) {
+/**
+ * Levenberg-Marquardt. Gibt {p, cost} zurück.
+ * power = 4: minimiert Σ r^8 (Näherung an min max |r|, für die Zulässigkeitsprüfung).
+ */
+function lm(p0, data, L, ctx, maxIt = 60, power = 1) {
+  const residuals = power === 1 ? residualsRaw : (q, d, l, c) => residualsRaw(q, d, l, c).map(x => Math.sign(x) * Math.abs(x) ** power);
   let p = normalize(p0.slice(), L);
   let r = residuals(p, data, L, ctx);
   let cost = ssq(r);
@@ -262,7 +272,7 @@ function candidates(data, L, ctx) {
       const p = new Array(L.n).fill(0);
       if (L.dFree) p[L.iD] = D;
       const { t, ghaShift } = obsTime(o, p, L);
-      const gp = sunGP(t);
+      const gp = bodyGP(o.body, t);
       const gha = gp.gha - ghaShift;
       // Missweisung am (noch unbekannten) Ort: zweimal nachführen
       let sols = closedForm(gp.dec, gha, o.hTrue, o.az);
@@ -331,15 +341,37 @@ function describe(sol, data, L) {
   };
 }
 
+
+/** Größtes normiertes Residuum der Messungen (ohne Vorgabe für m). ≤ 1: alle Messungen in ihren Grenzen. */
+function fmax(p, data, L, ctx) {
+  const r = residualsRaw(p, data, L, ctx);
+  let w = 0;
+  for (let i = 0; i < data.length * 2; i++) w = Math.max(w, Math.abs(r[i]));
+  return w;
+}
+
+/** Einzelprüfung jeder Zeile (unabhängig vom Ort). Gibt je Zeile null oder {bad, text}. */
+export function checkRows(obs) {
+  return obs.map(o => {
+    if (![o.h, o.az, o.eh, o.eZ, o.t].every(Number.isFinite)) return { bad: true, text: 'Unvollständige Messwerte' };
+    if (o.h < -1 || o.h > 90) return { bad: true, text: 'Höhe außerhalb −1° … 90° – an keinem Ort möglich' };
+    if (o.h < 3) return { bad: false, text: 'Sehr tief: Refraktion unsicher' };
+    if (o.h > 80) return { bad: false, text: 'Sehr hoch: Azimut unsicher' };
+    return null;
+  });
+}
+
 /**
- * Hauptlösung (+ Alternativen) bestimmen.
- * obs: [{t, hasDate, hasTime, h (scheinbar), az (magnetisch), eh, eZ}]
+ * Kandidaten bestimmen.
+ * obs: [{t, hasDate, hasTime, body, h (scheinbar), az (magnetisch), eh, eZ}]
  * opts: {table: makeDeclTable(...)}
- * Ergebnis: Felder der besten Lösung plus solutions:[…] (alle gleichwertigen, gleichrangig).
+ * Ergebnis: {ok, solutions:[Kandidaten], used:[Indizes der verwendeten Zeilen], flags:[je Zeile], layout, notes, …}
  */
-export function solve(obs, opts = {}) {
-  if (!obs.length) return { ok: false, reason: 'Keine Messungen' };
-  const data = prep(obs);
+export function solve(obsAll, opts = {}) {
+  const flags = checkRows(obsAll);
+  const used = obsAll.map((o, i) => i).filter(i => !(flags[i] && flags[i].bad));
+  if (!used.length) return { ok: false, reason: obsAll.length ? 'Keine plausiblen Messungen' : 'Keine Messungen', flags, used };
+  const data = prep(used.map(i => obsAll[i]));
   const L = layout(data);
   const table = opts.table || makeDeclTable(null);
   const ctx = { table, corr: 0, m0: 0, sm: 5 };
@@ -355,105 +387,182 @@ export function solve(obs, opts = {}) {
   sols.sort((a, b) => a.cost - b.cost);
   const uniq = [];
   for (const s of sols) if (!uniq.some(q => sameSolution(q, s, L))) uniq.push(s);
-  if (!uniq.length) return { ok: false, reason: 'Keine Lösung' };
+  if (!uniq.length) return { ok: false, reason: 'Keine Lösung', flags, used };
 
   const nEq = data.length * 2 + (L.mFree ? 1 : 0);
   const under = nEq < L.n;
-  // Gleichwertigkeit: Residuen sind auf die Fehlergrenze e normiert; e wird als ≈ 2σ gewertet,
-  // also χ² = 4·Σr². Lösungen mit Δχ² < 4 (≈ 95-%-Kriterium) sind statistisch nicht unterscheidbar
-  // und werden gleichrangig ausgegeben – ohne Bevorzugung nach Plausibilität oder Zeitzone.
-  // Unterbestimmt: Lösungsmenge ist ein Kontinuum, dann nur ein Vertreter (Streuung zeigt der Monte Carlo).
-  const chi2 = d => 4 * d.cost;
+  // Vorauswahl der Kandidaten (lokale Minima): statistisch gleichwertig (χ² = 4·Σr², e ≈ 2σ, Δχ² < 4)
+  // oder Residuen nicht grob außerhalb der Grenzen. Ob ein Kandidat wirklich zulässig ist, entscheidet analyze().
   const all = uniq.map(s => ({ ...describe(s, data, L), cost: s.cost }));
-  const best = chi2(all[0]);
-  const solutions = (under ? all.slice(0, 1) : all.filter(d => chi2(d) - best < 4)).slice(0, 6);
+  const best = 4 * all[0].cost;
+  const solutions = (under ? all.slice(0, 1) : all.filter(d => 4 * d.cost - best < 4 || d.worst <= 2)).slice(0, 8);
   const notes = [];
   if (!L.lonKnown) notes.push('Ohne absolute Uhrzeit ist die Länge nicht bestimmbar – auch nicht aus mehreren Messungen mit bekannten Zeitabständen, da eine Zeitverschiebung exakt einer Längenverschiebung entspricht.');
   if (L.mFree) notes.push('Missweisung unbekannt (Länge fehlt) – aus Messung geschätzt');
+  if (L.dFree && data.some(o => !o.hasDate && o.body !== 'sun')) notes.push('Ohne Datum ist die Länge aus Sternen/Planeten kaum bestimmbar (Sternzeit verschiebt sich um ~1° pro Tag).');
   if (under) notes.push(L.dFree ? 'Unterbestimmt: ohne Datum mehrere Messungen über einige Stunden nötig' : 'Unterbestimmt: weitere Messungen nötig');
-  else if (L.dFree && data.length < 3) notes.push('Ohne Datum: Ergebnis schwach bestimmt – mehr Messungen über einige Stunden verbessern es');
-  if (solutions[0].rms > 1.5) notes.push('Messungen passen schlecht zusammen (Residuen über den Fehlergrenzen)');
-  if (solutions.length > 1) notes.push(`Mehrdeutig: ${solutions.length} gleichwertige Lösungen`);
-  return { ok: true, ...solutions[0], solutions, lonKnown: L.lonKnown, layout: L, underdetermined: under, nObs: data.length, notes };
+  else if (L.dFree && data.length < 3) notes.push('Ohne Datum: Ergebnis schwach bestimmt – mehr Messungen verbessern es');
+  const nBad = flags.filter(f => f && f.bad).length;
+  if (nBad) notes.push(`${nBad === 1 ? 'Eine Messung' : nBad + ' Messungen'} unplausibel und nicht verwendet`);
+  return { ok: true, ...solutions[0], solutions, lonKnown: L.lonKnown, layout: L, underdetermined: under, nObs: data.length, used, flags, notes };
 }
 
-// ---------- Monte Carlo ----------
+// ---------- Lösungsbereich (Mengen-Ansatz) ----------
 
 /**
- * Streuung durch gleichverteilte Störung der Messwerte innerhalb ±eh/±eZ – das sind je Zeile genau
- * die Fehlergrenzen ±(0,5° + Sensor). Nuisance-Parameter werden zufällig initialisiert, Startpunkte
- * reihum aus allen gleichwertigen Lösungen. Die Punktwolke wird je Lösung geclustert (nächster
- * Lösungspunkt); Radius je Lösung = 95-%-Quantil der Abstände im eigenen Cluster. Läuft in Häppchen.
- * Ergebnis: {per:[{lat, lon, radius (m), latHalf (Grad), count}], runs, used, points}
+ * Lösungsbereich bestimmen. Monte Carlo: Messwerte gleichverteilt innerhalb ±eh/±eZ (= je Zeile genau
+ * ±(0,5° + Sensor)) stören, Nuisance-Parameter zufällig initialisieren, lösen; eine Probe zählt nur,
+ * wenn ihre Lösung ALLE Originalmessungen innerhalb der Grenzen erfüllt. Zusätzlich Gitter um jeden
+ * Kandidaten (Ringe/Peilungen, adaptiv vergrößert bzw. verfeinert) mit derselben Zulässigkeitsprüfung.
+ * Bereich je Lösung: Mittelpunkt (zulässiger Kandidat bzw. Minimax-Punkt) und größter Abstand
+ * zulässiger Punkte (Radius, m) bzw. Breitenausdehnung (latHalf, Grad).
+ * Ergebnis: {regions:[…], inconsistent, lonOpen (Länge praktisch offen -> Band), rowFlags:{Index: Text}, accepted, runs, points}
  */
-export function monteCarlo(obs, sol, opts = {}) {
+export function analyze(obsAll, sol, opts = {}) {
   const runs = opts.runs ?? 200, chunk = opts.chunk ?? 10;
   const rng = opts.rng || Math.random;
-  const data = prep(obs);
+  const data = prep(sol.used.map(i => obsAll[i]));
   const L = sol.layout;
-  const sols = sol.solutions;
+  const cands = sol.solutions.map(c => ({ ...c, F: fmax(c.p, data, L, c.ctx) }));
   const pts = [];
-  const lim = Math.max(2, 2 * sol.rms + 0.5);
   const U = () => 2 * rng() - 1;
-  const rmsOf = (p, d, ctx) => Math.sqrt(ssq(residuals(p, d, L, ctx).slice(0, d.length * 2)) / (d.length * 2));
-  let k = 0;
+  let k = 0, accepted = 0;
+  const dist = (a, b) => L.lonKnown ? distance(a.lat, a.lon, b.lat, b.lon) : Math.abs(a.lat - b.lat) * 111195;
+
+  // Minimax-Punkt je Kandidat, falls das Ausgleichsminimum selbst nicht zulässig ist
+  for (const c of cands) {
+    c.center = c.p;
+    if (c.F > 1) {
+      const mm = lm(c.p, data, L, c.ctx, 80, 4);
+      const Fm = fmax(mm.p, data, L, c.ctx);
+      if (Fm < c.F) { c.center = mm.p; c.F = Fm; }
+    }
+  }
 
   function oneRun() {
     const pert = data.map(o => {
       const h = o.h + U() * o.eh;
       return { ...o, h, hTrue: apparentToTrue(h), az: o.az + U() * o.eZ };
     });
-    const s0 = sols[k++ % sols.length];
-    const ctx = { ...s0.ctx };
-    const p = s0.p.slice();
+    const c = cands[k++ % cands.length];
+    const ctx = { ...c.ctx };
+    const p = c.p.slice();
     if (L.dFree) p[L.iD] = U() * YEAR / 2;
     if (L.dtFree) p[L.iDt] = U() * 12;
     if (L.mFree) {
       // Missweisung an zufälliger Länge auf der geschätzten Breite
-      ctx.m0 = ctx.table.at(s0.lat, U() * 180);
+      ctx.m0 = ctx.table.at(c.lat, U() * 180);
       ctx.sm = 1;
       p[L.iM] = ctx.m0;
     }
-    let r = lm(p, pert, L, ctx);
-    let ok = rmsOf(r.p, pert, ctx) <= lim;
-    if (!ok) {
-      const q = s0.p.slice();
-      if (L.mFree) q[L.iM] = ctx.m0;
-      r = lm(q, pert, L, ctx);
-      ok = rmsOf(r.p, pert, ctx) <= lim;
+    for (const start of [p, c.p]) {
+      const r = lm(start, pert, L, ctx);
+      if (fmax(r.p, data, L, c.ctx) <= 1) { pts.push({ lat: r.p[0], lon: r.p[1] }); accepted++; return; }
     }
-    if (ok) pts.push({ lat: r.p[0], lon: r.p[1] });
+  }
+
+  /** Gitter um den Kandidaten (Nuisance-Parameter fest): zulässige Punkte. */
+  function gridScan(c) {
+    const p0 = c.center;
+    const K = 24, B = 36;
+    let R = 300e3, grew = false, out = [];
+    for (let it = 0; it < 10; it++) {
+      const feas = [];
+      let maxRing = 0;
+      for (let ring = 1; ring <= K; ring++) {
+        for (let b = 0; b < B; b++) {
+          const [lat, lon] = destination(p0[0], p0[1], b * 360 / B, R * ring / K);
+          const q = p0.slice(); q[0] = lat; q[1] = lon;
+          if (fmax(q, data, L, c.ctx) <= 1) { feas.push({ lat, lon }); maxRing = ring; }
+        }
+      }
+      out = feas;
+      if (maxRing === K && R < 15000e3) { R *= 3; grew = true; continue; }
+      if (!grew && maxRing <= 3 && c.F <= 1 && R > 2000) { R /= 4; continue; }
+      break;
+    }
+    return out;
   }
 
   function summarize() {
-    const dist = (a, b) => L.lonKnown ? distance(a.lat, a.lon, b.lat, b.lon) : Math.abs(a.lat - b.lat) * 111195;
-    let cs = sols.map(c => ({ lat: c.lat, lon: L.lonKnown ? c.lon : 0 }));
-    if (sol.underdetermined && pts.length > 4) {
-      // unterbestimmt: Medoid der Punktwolke als Mittelpunkt
-      let best = Infinity;
-      for (const a of pts) {
-        let s = 0;
-        for (const b of pts) s += dist(a, b);
-        if (s < best) { best = s; cs = [{ lat: a.lat, lon: L.lonKnown ? a.lon : 0 }]; }
-      }
-    }
-    const groups = cs.map(() => []);
+    for (const c of cands) for (const q of gridScan(c)) pts.push(q);
+    const centers = cands.map(c => ({ lat: c.center[0], lon: L.lonKnown ? c.center[1] : 0 }));
+    const groups = cands.map(() => []);
     for (const q of pts) {
       let bi = 0, bd = Infinity;
-      cs.forEach((c, i) => { const d = dist(q, c); if (d < bd) { bd = d; bi = i; } });
-      groups[bi].push({ d: bd, dl: Math.abs(q.lat - cs[bi].lat) });
+      centers.forEach((c, i) => { const d = dist(q, c); if (d < bd) { bd = d; bi = i; } });
+      groups[bi].push(q);
     }
-    const q95 = arr => { if (!arr.length) return NaN; const s = arr.slice().sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(0.95 * s.length))]; };
-    const per = groups.map((g, i) => ({ ...cs[i], radius: L.lonKnown ? q95(g.map(x => x.d)) : NaN, latHalf: q95(g.map(x => x.dl)), count: g.length }));
-    // dünn besetzte Cluster: größten Radius gut besetzter Cluster übernehmen (vorsichtig)
-    const full = per.filter(c => c.count >= 5);
-    for (const c of per) {
-      if (c.count >= 5 || !full.length) continue;
-      c.radius = Math.max(...full.map(x => x.radius));
-      c.latHalf = Math.max(...full.map(x => x.latHalf));
-      c.sparse = true;
+    let regions = [];
+    cands.forEach((c, i) => {
+      const g = groups[i];
+      if (!g.length && c.F > 1) return; // keine zulässigen Orte: kein Lösungsbereich
+      let ctr = centers[i];
+      if (c.F > 1 && g.length) {
+        // Mittelpunkt nicht zulässig: Medoid der zulässigen Punkte
+        let best = Infinity;
+        for (const a of g) { let s = 0; for (const b of g) s += dist(a, b); if (s < best) { best = s; ctr = { lat: a.lat, lon: L.lonKnown ? a.lon : 0 }; } }
+      } else if (sol.underdetermined && g.length > 4) {
+        let best = Infinity;
+        for (const a of g) { let s = 0; for (const b of g) s += dist(a, b); if (s < best) { best = s; ctr = { lat: a.lat, lon: L.lonKnown ? a.lon : 0 }; } }
+      }
+      let radius = 0, latHalf = 0;
+      for (const q of g) { radius = Math.max(radius, dist(q, ctr)); latHalf = Math.max(latHalf, Math.abs(q.lat - ctr.lat)); }
+      regions.push({
+        lat: ctr.lat, lon: L.lonKnown ? ctr.lon : null,
+        radius: L.lonKnown ? radius : NaN, latHalf, count: g.length,
+        decl: c.decl, dDays: c.dDays, dtMin: c.dtMin, tight: c.worst > 1, src: i
+      });
+    });
+    // überlappende Bereiche (gleiche Talsohle) zusammenfassen – der Kreis umschließt beide
+    regions.sort((a, b) => b.count - a.count);
+    const merged = [];
+    for (const r of regions) {
+      const host = merged.find(m => L.lonKnown ? distance(m.lat, m.lon, r.lat, r.lon) <= m.radius : Math.abs(m.lat - r.lat) <= m.latHalf);
+      if (host) {
+        if (L.lonKnown) host.radius = Math.max(host.radius, distance(host.lat, host.lon, r.lat, r.lon) + r.radius);
+        host.latHalf = Math.max(host.latHalf, Math.abs(host.lat - r.lat) + r.latHalf);
+        host.count += r.count;
+      } else merged.push({ ...r });
     }
-    return { per, runs, used: pts.length, points: pts };
+    regions = merged.sort((a, b) => a.src - b.src);
+
+    // Zulässige Orte über mehr als die halbe Erde verteilt (z. B. nur Polaris, Sterne ohne Datum):
+    // Länge praktisch offen -> als Breitenband darstellen statt als Kreise.
+    let lonOpen = false;
+    if (L.lonKnown && pts.length > 10) {
+      const lons = pts.map(q => ((q.lon % 360) + 360) % 360).sort((a, b) => a - b);
+      let gap = 360 - lons[lons.length - 1] + lons[0];
+      for (let j = 1; j < lons.length; j++) gap = Math.max(gap, lons[j] - lons[j - 1]);
+      if (360 - gap > 180) {
+        lonOpen = true;
+        const lats = pts.map(q => q.lat).sort((a, b) => a - b);
+        const lo = lats[0], hi = lats[lats.length - 1];
+        regions = [{ lat: (lo + hi) / 2, lon: null, radius: NaN, latHalf: (hi - lo) / 2, count: pts.length,
+          decl: null, dDays: null, dtMin: null, tight: false, src: 0 }];
+      }
+    }
+
+    const rowFlags = {};
+    const inconsistent = !regions.length;
+    const main = sol.solutions[0];
+    if (inconsistent || main.worst > 1) {
+      // größte normierte Abweichungen an der besten Ausgleichslösung
+      const per = data.map((o, j) => Math.max(Math.abs(main.resid[2 * j]), Math.abs(main.resid[2 * j + 1])));
+      const order = per.map((v, j) => j).sort((a, b) => per[b] - per[a]);
+      for (const j of order.slice(0, inconsistent ? 2 : 1)) {
+        if (per[j] > 1) rowFlags[sol.used[j]] = `Abweichung ${per[j].toFixed(1)}× Fehlergrenze`;
+      }
+      // Weglassprobe: welche einzelne Zeile macht den Rest widerspruchsfrei?
+      if (inconsistent && data.length >= 3) {
+        for (let j = 0; j < data.length; j++) {
+          const rest = data.filter((_, x) => x !== j);
+          const r = lm(main.p, rest, L, main.ctx);
+          if (fmax(r.p, rest, L, main.ctx) <= 1) rowFlags[sol.used[j]] = 'Vermutlich Ausreißer: ohne diese Zeile sind die übrigen Messungen widerspruchsfrei';
+        }
+      }
+    }
+    return { regions, inconsistent, lonOpen, rowFlags, accepted, runs, points: pts };
   }
 
   return new Promise(resolve => {
@@ -464,7 +573,7 @@ export function monteCarlo(obs, sol, opts = {}) {
       for (; done < end; done++) oneRun();
       opts.onProgress && opts.onProgress(done / runs);
       if (done < runs) setTimeout(step, 0);
-      else resolve(summarize());
+      else setTimeout(() => resolve(opts.isCancelled && opts.isCancelled() ? null : summarize()), 0);
     }
     step();
   });
