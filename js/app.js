@@ -7,44 +7,55 @@
 
 import { h, svg } from './lib/ui.js';
 
-const stroke = 'fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"';
+const stroke = 'fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"';
 
 export const TOOLS = [
   {
-    id: 'altimeter', title: 'Höhenmesser',
-    icon: `<svg viewBox="0 0 64 64" ${stroke}><circle cx="32" cy="32" r="24"/><path d="M32 11v5M32 48v5M11 32h5M48 32h5M17.2 17.2l3.5 3.5M43.3 43.3l3.5 3.5M17.2 46.8l3.5-3.5M43.3 20.7l3.5-3.5"/><path d="M32 32 41 18" stroke-width="2.4"/><path d="M32 32 24 39" stroke-width="3.2"/><circle cx="32" cy="32" r="2.2" fill="currentColor"/></svg>`
+    id: 'altimeter', title: 'Höhenmesser', sub: 'Barometrisch · hPa',
+    icon: `<svg viewBox="0 0 64 64" ${stroke}><circle cx="32" cy="32" r="25"/><path d="M32 11v4M53 32h-4M32 53v-4M11 32h4" stroke-width="2"/><path d="M32 32 43 17"/><path d="M32 32 22 40" stroke-width="4"/><circle cx="32" cy="32" r="2.6" fill="currentColor" stroke="none"/></svg>`
   },
   {
-    id: 'gps', title: 'GPS (offline)',
-    icon: `<svg viewBox="0 0 64 64" ${stroke}><circle cx="32" cy="32" r="18" stroke-dasharray="3 4"/><circle cx="32" cy="32" r="5" fill="currentColor"/><path d="M32 6v10M32 48v10M6 32h10M48 32h10"/></svg>`
+    id: 'gps', title: 'GPS', sub: 'Offline · Satelliten',
+    icon: `<svg viewBox="0 0 64 64" ${stroke}><circle cx="32" cy="32" r="19" stroke-dasharray="4 5"/><circle cx="32" cy="32" r="6" fill="currentColor" stroke="none"/><path d="M32 5v9M32 50v9M5 32h9M50 32h9"/></svg>`
   },
   {
-    id: 'ins', title: 'Inertialnavigation',
-    icon: `<svg viewBox="0 0 64 64" ${stroke}><path d="M10 52c6-2 10-8 14-15s8-11 15-12 12-4 15-13" stroke-dasharray="1 0"/><circle cx="10" cy="52" r="3" fill="currentColor"/><path d="M49 6l6 6-8 2z" fill="currentColor"/><circle cx="24" cy="37" r="1.6" fill="currentColor"/><circle cx="39" cy="25" r="1.6" fill="currentColor"/></svg>`
+    id: 'ins', title: 'Inertialnavigation', sub: 'Koppelnavigation',
+    icon: `<svg viewBox="0 0 64 64" ${stroke}><path d="M12 52c8 0 10-10 18-14s14-4 16-14" stroke-dasharray="1 6"/><circle cx="12" cy="52" r="4" fill="currentColor" stroke="none"/><path d="M38 14l13-4-4 13"/><path d="M51 10 40 21"/></svg>`
   },
   {
-    id: 'sunfix', title: 'Sonnenortung',
-    icon: `<svg viewBox="0 0 64 64" ${stroke}><path d="M6 50h52"/><circle cx="42" cy="22" r="7"/><path d="M42 9v3M42 32v3M29 22h3M52 22h3M32.8 12.8l2.1 2.1M49.1 29.1l2.1 2.1M32.8 31.2l2.1-2.1M49.1 14.9l2.1-2.1"/><path d="M14 50 36 27" stroke-width="2.4"/><path d="M24 50a10 10 0 0 0-3.2-7.3"/></svg>`
+    id: 'sunfix', title: 'Sonnenortung', sub: 'Position ohne GPS',
+    icon: `<svg viewBox="0 0 64 64" ${stroke}><path d="M8 50h48"/><circle cx="42" cy="22" r="7"/><path d="M42 8v3M42 33v3M28 22h3M53 22h3M32 12l2 2M50 30l2 2M32 32l2-2M50 14l2-2" stroke-width="2"/><path d="M14 50 34 30"/><path d="M25 50a11 11 0 0 0-3-7.6" stroke-width="2"/></svg>`
   },
   {
-    id: 'coords', title: 'Koordinaten',
-    icon: `<svg viewBox="0 0 64 64" ${stroke}><circle cx="32" cy="32" r="22"/><ellipse cx="32" cy="32" rx="9" ry="22"/><path d="M10 32h44M14 20h36M14 44h36"/></svg>`
+    id: 'coords', title: 'Koordinaten', sub: 'UTM · MGRS · Grad · Gauß-Krüger',
+    icon: `<svg viewBox="0 0 64 64" ${stroke}><circle cx="32" cy="32" r="23"/><ellipse cx="32" cy="32" rx="10" ry="23"/><path d="M9 32h46M13 20h38M13 44h38" stroke-width="2"/></svg>`
   }
 ];
 
 const $ = id => document.getElementById(id);
 let cleanup = null;
+let offlineReady = false;
+
+function updateFoot() {
+  const el = document.getElementById('home-foot');
+  if (!el) return;
+  el.textContent = [navigator.onLine ? 'Online' : 'Offline', offlineReady ? 'Offline verfügbar' : null].filter(Boolean).join(' · ');
+}
+window.addEventListener('online', updateFoot);
+window.addEventListener('offline', updateFoot);
 let navToken = 0;
 
 function renderGrid() {
   const grid = $('grid');
   grid.textContent = '';
-  for (const t of TOOLS) {
-    const tile = h('button.tile', { type: 'button', onclick: () => { location.hash = '#/' + t.id; } },
-      svg(t.icon), h('span', t.title));
+  TOOLS.forEach((t, i) => {
+    const wide = TOOLS.length % 2 === 1 && i === TOOLS.length - 1;
+    const tile = h('button.tile', { type: 'button', class: wide ? 'wide' : null, onclick: () => { location.hash = '#/' + t.id; } },
+      h('span.tile-icon', svg(t.icon)),
+      h('span.tile-text', h('span.tile-title', t.title), h('span.tile-sub', t.sub)));
     grid.append(tile);
-  }
-  if (TOOLS.length % 2) grid.append(h('div.tile.is-empty'));
+  });
+  grid.append(h('div.home-foot#home-foot', navigator.onLine ? 'Online' : 'Offline'));
 }
 
 async function route() {
@@ -96,8 +107,10 @@ $('back').addEventListener('click', () => {
 window.addEventListener('hashchange', route);
 // Modulskripte laufen nach dem Parsen des Dokuments (und nach den defer-Skripten davor).
 renderGrid();
+updateFoot();
 route();
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW', e));
+  navigator.serviceWorker.ready.then(() => { offlineReady = true; updateFoot(); });
 }

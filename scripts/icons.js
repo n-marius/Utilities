@@ -18,12 +18,18 @@ function iconSVG({ rounded = true, scale = 1 } = {}) {
     </linearGradient>
   </defs>
   <rect width="512" height="512" ${rounded ? 'rx="112"' : ''} fill="url(#bg)"/>
-  <rect x="${rx}" y="${ry}" width="${rw}" height="${rhh}" rx="${32 * s}" fill="none" stroke="#f4f5fb" stroke-width="${17 * s}"/>
-  <line x1="${t(140, cx)}" y1="${t(194, cy)}" x2="${t(372, cx)}" y2="${t(194, cy)}" stroke="#f4f5fb" stroke-opacity=".5" stroke-width="${10 * s}" stroke-linecap="round"/>
-  <path d="M${cx} ${t(160, cy)} L${t(302, cx)} ${t(258, cy)} L${cx} ${t(258, cy)} Z" fill="url(#needle)"/>
-  <path d="M${cx} ${t(160, cy)} L${t(210, cx)} ${t(258, cy)} L${cx} ${t(258, cy)} Z" fill="#f4f5fb" fill-opacity="1"/>
-  <path d="M${t(210, cx)} ${t(258, cy)} L${t(302, cx)} ${t(258, cy)} L${cx} ${t(356, cy)} Z" fill="#f4f5fb" fill-opacity=".42"/>
-  <circle cx="${cx}" cy="${t(258, cy)}" r="${9 * s}" fill="#1c4ba3" stroke="#f4f5fb" stroke-width="${5 * s}"/>
+  <circle cx="${cx}" cy="${cy}" r="${150 * s}" fill="none" stroke="#f4f5fb" stroke-width="${15 * s}"/>
+  <g stroke="#f4f5fb" stroke-width="${7 * s}" stroke-linecap="round" stroke-opacity=".55">
+    <line x1="${cx}" y1="${t(122, cy)}" x2="${cx}" y2="${t(140, cy)}"/>
+    <line x1="${cx}" y1="${t(372, cy)}" x2="${cx}" y2="${t(390, cy)}"/>
+    <line x1="${t(122, cx)}" y1="${cy}" x2="${t(140, cx)}" y2="${cy}"/>
+    <line x1="${t(372, cx)}" y1="${cy}" x2="${t(390, cx)}" y2="${cy}"/>
+  </g>
+  <line x1="${t(140, cx)}" y1="${t(214, cy)}" x2="${t(372, cx)}" y2="${t(214, cy)}" stroke="#f4f5fb" stroke-opacity=".45" stroke-width="${10 * s}" stroke-linecap="round"/>
+  <path d="M${cx} ${t(160, cy)} L${t(300, cx)} ${cy} L${cx} ${cy} Z" fill="url(#needle)"/>
+  <path d="M${cx} ${t(160, cy)} L${t(212, cx)} ${cy} L${cx} ${cy} Z" fill="#f4f5fb"/>
+  <path d="M${t(212, cx)} ${cy} L${t(300, cx)} ${cy} L${cx} ${t(352, cy)} Z" fill="#f4f5fb" fill-opacity=".42"/>
+  <circle cx="${cx}" cy="${cy}" r="${9 * s}" fill="#1c4ba3" stroke="#f4f5fb" stroke-width="${5 * s}"/>
 </svg>`;
 }
 
@@ -39,11 +45,12 @@ fs.writeFileSync(path.join(out, 'icon.svg'), iconSVG());
     ['icon-192.png', 192, iconSVG({ rounded: false })],
     ['apple-touch-icon.png', 180, iconSVG({ rounded: false })],
     ['maskable-512.png', 512, iconSVG({ rounded: false, scale: 0.74 })],
+    [process.env.PREVIEW || '/tmp/claude-0/icon-preview.png', 512, iconSVG()],
   ];
   for (const [name, size, svg] of jobs) {
     await page.setViewportSize({ width: size, height: size });
     await page.setContent(`<html><body style="margin:0;background:transparent">${svg.replace('width="512" height="512"', `width="${size}" height="${size}"`)}</body></html>`);
-    await page.screenshot({ path: path.join(out, name), omitBackground: true, clip: { x: 0, y: 0, width: size, height: size } });
+    await page.screenshot({ path: path.resolve(out, name), omitBackground: true, clip: { x: 0, y: 0, width: size, height: size } });
   }
   await browser.close();
 })();

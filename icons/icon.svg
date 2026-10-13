@@ -10,10 +10,16 @@
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <rect x="85" y="125" width="342" height="262" rx="32" fill="none" stroke="#f4f5fb" stroke-width="17"/>
-  <line x1="140" y1="194" x2="372" y2="194" stroke="#f4f5fb" stroke-opacity=".5" stroke-width="10" stroke-linecap="round"/>
-  <path d="M256 160 L302 258 L256 258 Z" fill="url(#needle)"/>
-  <path d="M256 160 L210 258 L256 258 Z" fill="#f4f5fb" fill-opacity="1"/>
-  <path d="M210 258 L302 258 L256 356 Z" fill="#f4f5fb" fill-opacity=".42"/>
-  <circle cx="256" cy="258" r="9" fill="#1c4ba3" stroke="#f4f5fb" stroke-width="5"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#f4f5fb" stroke-width="15"/>
+  <g stroke="#f4f5fb" stroke-width="7" stroke-linecap="round" stroke-opacity=".55">
+    <line x1="256" y1="122" x2="256" y2="140"/>
+    <line x1="256" y1="372" x2="256" y2="390"/>
+    <line x1="122" y1="256" x2="140" y2="256"/>
+    <line x1="372" y1="256" x2="390" y2="256"/>
+  </g>
+  <line x1="140" y1="214" x2="372" y2="214" stroke="#f4f5fb" stroke-opacity=".45" stroke-width="10" stroke-linecap="round"/>
+  <path d="M256 160 L300 256 L256 256 Z" fill="url(#needle)"/>
+  <path d="M256 160 L212 256 L256 256 Z" fill="#f4f5fb"/>
+  <path d="M212 256 L300 256 L256 352 Z" fill="#f4f5fb" fill-opacity=".42"/>
+  <circle cx="256" cy="256" r="9" fill="#1c4ba3" stroke="#f4f5fb" stroke-width="5"/>
 </svg>
