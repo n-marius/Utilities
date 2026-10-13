@@ -555,10 +555,16 @@ export function analyze(obsAll, sol, opts = {}) {
       }
       // Weglassprobe: welche einzelne Zeile macht den Rest widerspruchsfrei?
       if (inconsistent && data.length >= 3) {
+        const sus = [];
         for (let j = 0; j < data.length; j++) {
           const rest = data.filter((_, x) => x !== j);
           const r = lm(main.p, rest, L, main.ctx);
-          if (fmax(r.p, rest, L, main.ctx) <= 1) rowFlags[sol.used[j]] = 'Vermutlich Ausreißer: ohne diese Zeile sind die übrigen Messungen widerspruchsfrei';
+          if (fmax(r.p, rest, L, main.ctx) <= 1) sus.push(sol.used[j]);
+        }
+        if (sus.length) {
+          // eindeutige Kandidaten gefunden: nur diese markieren
+          for (const key of Object.keys(rowFlags)) delete rowFlags[key];
+          for (const j of sus) rowFlags[j] = 'Vermutlich Ausreißer: ohne diese Zeile sind die übrigen Messungen widerspruchsfrei';
         }
       }
     }
