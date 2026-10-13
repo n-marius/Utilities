@@ -18,7 +18,10 @@ export const wrap180 = a => { a = wrap360(a); return a > 180 ? a - 360 : a; };
 
 /** Annahmen der Fehlerschätzung (keine Messwerte). */
 export const ASSUME = {
-  stepScale: 0.03,      // Schrittlängenfehler: 3 % je zurückgelegtem Meter (kalibrierte Schrittlänge vorausgesetzt)
+  stepScale: 0.10,      // Schrittlängenfehler: 10 % je Meter (Schrittlänge schwankt mit Tempo, Gelände, Steigung)
+  falseSteps: 0.2,      // Fehlerkannte Schritte in Ruhe (je Minute): Gesten, Ablegen, Erschütterungen
+  zuptWin: 0.5,         // ZUPT-Erkennungsfenster w (s)
+  zuptGyro: 30,         // ZUPT nur bei Drehrate unter diesem Wert (Grad/s)
   headingErr0: 5,       // Startkursfehler (Grad), falls keine Angabe
   driftMove: 0.5,       // Kursdrift der Gyro-Fusion bei Bewegung (Grad/min)
   driftRest: 0.1,       // Kursdrift in Ruhe (Grad/min); das System schätzt den Gyro-Bias im Stillstand nach
@@ -109,33 +112,37 @@ export class StepDetector {
 
 /**
  * Strapdown-Integration (horizontal): Beschleunigung in ENU zweifach integrieren.
- * Optional ZUPT: Ist die Linearbeschleunigung über 0,5 s nahezu konstant null,
- * wird die Geschwindigkeit auf 0 gesetzt (Stillstand).
+ * Optional ZUPT: Ist die Linearbeschleunigung über 0,5 s nahezu konstant null und dreht
+ * sich das Gerät kaum (Drehrate < 30°/s, falls gemeldet), wird die Geschwindigkeit auf 0
+ * gesetzt (Stillstand). Die Drehraten-Bedingung verhindert, dass Drehen/Kippen auf der
+ * Stelle oder gleichförmiges Schwenken fälschlich als Stillstand gilt.
+ * Grenze: gleichförmige Fahrt (Zug, Auto) ist mit Beschleunigungsmessern allein nicht
+ * von Stillstand zu unterscheiden.
  */
 export class Strapdown {
-  constructor({ zupt = true, win = 0.5, stdMax = 0.08, meanMax = 0.15 } = {}) {
-    Object.assign(this, { zupt, win, stdMax, meanMax });
+  constructor({ zupt = true, win = ASSUME.zuptWin, stdMax = 0.08, meanMax = 0.15, gyroMax = ASSUME.zuptGyro } = {}) {
+    Object.assign(this, { zupt, win, stdMax, meanMax, gyroMax });
     this.reset();
   }
   reset() {
     this.vE = 0; this.vN = 0; this.pE = 0; this.pN = 0; this.dist = 0;
     this.buf = []; this.still = false;
   }
-  /** aE, aN in m/s² (ENU), aMag = Betrag Linearbeschleunigung (Gerät), t und dt in s. */
-  push(t, dt, aE, aN, aMag) {
+  /** aE, aN in m/s² (ENU), aMag = Betrag Linearbeschleunigung (Gerät), gyro = Drehrate (Grad/s), t und dt in s. */
+  push(t, dt, aE, aN, aMag, gyro = 0) {
     // Trapezregel für die Position
     const vE0 = this.vE, vN0 = this.vN;
     this.vE += aE * dt;
     this.vN += aN * dt;
     if (this.zupt) {
-      this.buf.push([t, aMag]);
+      this.buf.push([t, aMag, gyro || 0]);
       while (this.buf.length && t - this.buf[0][0] > this.win) this.buf.shift();
       this.still = false;
       if (this.buf.length >= 8 && t - this.buf[0][0] > this.win * 0.8) {
-        let s = 0, s2 = 0;
-        for (const [, m] of this.buf) { s += m; s2 += m * m; }
+        let s = 0, s2 = 0, gMax = 0;
+        for (const [, m, g] of this.buf) { s += m; s2 += m * m; if (g > gMax) gMax = g; }
         const n = this.buf.length, mean = s / n, sd = Math.sqrt(Math.max(0, s2 / n - mean * mean));
-        if (sd < this.stdMax && mean < this.meanMax) { this.still = true; this.vE = 0; this.vN = 0; }
+        if (sd < this.stdMax && mean < this.meanMax && gMax < this.gyroMax) { this.still = true; this.vE = 0; this.vN = 0; }
       }
     }
     const dE = (vE0 + this.vE) / 2 * dt, dN = (vN0 + this.vN) / 2 * dt;
@@ -187,23 +194,30 @@ export function biasUncertainty(spread, n) {
 
 /**
  * Fehlerradius (m), grobe Schätzung, schrittweise fortgeschrieben.
- * Wächst nur durch Bewegung:
- *   Schritte:  r = r₀ + Σ (3 % + sin ψ)·Δs
- *   Strapdown: r = r₀ + Σ_Abschnitte ½·b·T² + Σ sin ψ·Δs
- * T Dauer eines Bewegungsabschnitts; ein erkannter Stillstand (ZUPT) setzt die Geschwindigkeit
- * auf 0 und schließt den Abschnitt (Restgeschwindigkeitsfehler damit beseitigt). Ohne ZUPT ist
- * die ganze Laufzeit ein Abschnitt. ψ = ψ₀ + Drift_Bewegung·t_Bew + Drift_Ruhe·t_Ruhe.
+ *   Strapdown: r = r₀ + Σ_Abschnitte (½·b·T² + b·T·w) + b·w·t_Ruhe + Σ sin ψ·Δs
+ *   Schritte:  r = r₀ + Σ (10 % + sin ψ)·Δs + f·L·t_Ruhe
+ * T Dauer eines Bewegungsabschnitts. Ein erkannter Stillstand (ZUPT) setzt v = 0 und schließt
+ * den Abschnitt; die bis dahin aufgebaute Restgeschwindigkeit b·T wirkt noch etwa ein
+ * Erkennungsfenster w lang (b·T·w). In Ruhe bleibt ein kleiner Zuwachs: Innerhalb jedes Fensters
+ * kann durch Rest-Bias eine Geschwindigkeit bis b·w entstehen, bevor ZUPT sie nullt
+ * (Positionsrate ≤ b·w, ≈ 0,3 m/min bei b = 0,01 m/s²); der Kursfehler auf dieser
+ * Reststrecke geht über Δs ein. Schritte: f fehlerkannte Schritte je Minute Ruhe, L Schrittlänge.
+ * Ohne ZUPT ist die ganze Laufzeit ein Abschnitt. ψ = ψ₀ + Drift_Bewegung·t_Bew + Drift_Ruhe·t_Ruhe.
  */
 export class ErrorModel {
-  constructor({ method = 'strapdown', e0 = 0, psi0 = ASSUME.headingErr0, b = ASSUME.accelBias } = {}, state = null) {
-    Object.assign(this, { method, e0, psi0, b, segT: 0, segSum: 0, tMove: 0, tRest: 0, head: 0, scale: 0 }, state || {});
+  constructor({ method = 'strapdown', e0 = 0, psi0 = ASSUME.headingErr0, b = ASSUME.accelBias, stepLen = 0.75 } = {}, state = null) {
+    Object.assign(this, { method, e0, psi0, b, stepLen, segT: 0, segSum: 0, tMove: 0, tRest: 0, rest: 0, head: 0, scale: 0 }, state || {});
   }
   get psi() {
     return Math.min(90, this.psi0 + (ASSUME.driftMove * this.tMove + ASSUME.driftRest * this.tRest) / 60);
   }
   /** dt Zeit (s), rest = Stillstand erkannt, ds zurückgelegte Strecke (m) seit dem letzten Aufruf. */
   update(dt, rest, ds = 0) {
-    if (rest) { this.tRest += dt; this.closeSegment(); }
+    if (rest) {
+      this.tRest += dt;
+      this.closeSegment();
+      this.rest += this.method === 'strapdown' ? this.b * ASSUME.zuptWin * dt : ASSUME.falseSteps / 60 * this.stepLen * dt;
+    }
     else { this.tMove += dt; this.segT += dt; }
     if (ds > 0) {
       this.head += ds * Math.sin(this.psi * Math.PI / 180);
@@ -212,15 +226,15 @@ export class ErrorModel {
   }
   /** Bewegungsabschnitt abschließen (Stillstand oder Pause mit v = 0). */
   closeSegment() {
-    if (this.segT > 0) { this.segSum += 0.5 * this.b * this.segT * this.segT; this.segT = 0; }
+    if (this.segT > 0) { this.segSum += 0.5 * this.b * this.segT * this.segT + this.b * this.segT * ASSUME.zuptWin; this.segT = 0; }
   }
   get radius() {
     const own = this.method === 'strapdown' ? this.segSum + 0.5 * this.b * this.segT * this.segT : this.scale;
-    return this.e0 + own + this.head;
+    return this.e0 + own + this.rest + this.head;
   }
   toJSON() {
-    const { method, e0, psi0, b, segT, segSum, tMove, tRest, head, scale } = this;
-    return { method, e0, psi0, b, segT, segSum, tMove, tRest, head, scale };
+    const { method, e0, psi0, b, stepLen, segT, segSum, tMove, tRest, rest, head, scale } = this;
+    return { method, e0, psi0, b, stepLen, segT, segSum, tMove, tRest, rest, head, scale };
   }
 }
 

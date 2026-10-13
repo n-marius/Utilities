@@ -1,7 +1,7 @@
 // Service Worker: App offline verfügbar machen, Kartenkacheln zwischenspeichern.
 // ASSETS und VERSION werden von scripts/precache.js aktualisiert.
 
-const VERSION = '5ed12c0d0c';
+const VERSION = 'c6049b32de';
 const ASSETS = [
   './',
   'index.html',
@@ -15,13 +15,20 @@ const ASSETS = [
   'js/lib/sensors.js',
   'js/lib/store.js',
   'js/lib/ui.js',
+  'js/tools/astro/bodies.js',
+  'js/tools/astro/catalog.js',
+  'js/tools/astro/ephem.js',
+  'js/tools/astro/fixui.js',
+  'js/tools/astro/solver.js',
+  'js/tools/astro/sun.js',
   'js/tools/coords/convert.js',
   'js/tools/coords/w3w.js',
   'js/tools/coords.js',
+  'js/tools/gravity/model.js',
+  'js/tools/gravity.js',
   'js/tools/ins/core.js',
   'js/tools/ins.js',
-  'js/tools/sunfix/solver.js',
-  'js/tools/sunfix/sun.js',
+  'js/tools/stars.js',
   'js/tools/sunfix.js',
   'vendor/geomagnetism.min.js',
   'vendor/leaflet/images/layers-2x.png',
@@ -36,7 +43,8 @@ const ASSETS = [
   'icons/icon-512.png',
   'icons/icon.svg',
   'icons/maskable-512.png',
-  'data/basemap.json'
+  'data/basemap.json',
+  'data/gravity-anomaly.bin'
 ];
 
 const APP_CACHE = 'utilities-app-' + VERSION;

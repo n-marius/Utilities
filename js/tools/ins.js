@@ -41,7 +41,7 @@ const STYLE = `
 .ins-sub2 { font-size: 12.5px; color: var(--text-2); margin-top: 2px; }
 .ins-err { color: var(--danger); }
 .ins-formula { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--surface-2);
-  border-radius: 8px; padding: 8px 10px; line-height: 1.6; overflow-x: auto; white-space: nowrap; }
+  border-radius: 8px; padding: 8px 10px; line-height: 1.6; overflow-x: auto; white-space: pre; }
 .ins-status { font-size: 12.5px; color: var(--text-2); text-align: center; font-variant-numeric: tabular-nums; }
 .ins-list-v { text-align: right; }
 `;
@@ -208,14 +208,16 @@ export function mount(body, ctx) {
 
   const runList = h('div.list');
   const formula = h('div.ins-formula',
-    h('div', 'Inertial: r = r₀ + Σ½·b·T² + Σ sin ψ·Δs'),
-    h('div', 'Schritte: r = r₀ + Σ (3 % + sin ψ)·Δs'),
+    h('div', 'Inertial: r = r₀ + Σ(½·b·T² + b·T·w)'),
+    h('div', '          + b·w·t_Ruhe + Σ sin ψ·Δs'),
+    h('div', `Schritte: r = r₀ + Σ (${fmt(ASSUME.stepScale * 100, 0)} % + sin ψ)·Δs`),
+    h('div', `          + ${fmt(ASSUME.falseSteps, 1)}/min·L·t_Ruhe`),
     h('div', `ψ = ψ₀ + ${fmt(ASSUME.driftMove, 1)}°/min·t_Bew + ${fmt(ASSUME.driftRest, 1)}°/min·t_Ruhe`),
     h('div', `b = √((σ/√n)² + ${fmt(ASSUME.biasInst, 2)}²) m/s²`));
   const estCard = h('div.card.ins-gap',
     h('div.card-title', 'Fehlerradius (Schätzung)'),
     formula,
-    h('p.ins-note', `Der Kreis wächst nur bei Bewegung. T Dauer je Bewegungsabschnitt – ein erkannter Stillstand (ZUPT) beendet ihn; ohne ZUPT zählt die ganze Laufzeit. Δs zurückgelegte Strecke, r₀ Startunsicherheit (GPS-Genauigkeit, manuell 0 m), ψ₀ Startkursfehler (Kompassgenauigkeit, sonst ${ASSUME.headingErr0}°), σ und n aus der Kalibrierung, ${fmt(ASSUME.biasInst, 2)} m/s² angenommener Rest-Bias (Instabilität, Schwerkraftleck beim Drehen/Neigen). Drift- und Bias-Werte sind Annahmen, keine Messwerte.`)
+    h('p.ins-note', `T Dauer je Bewegungsabschnitt – ein erkannter Stillstand (ZUPT) beendet ihn; ohne ZUPT zählt die ganze Laufzeit. w = ${fmt(ASSUME.zuptWin, 1)} s Erkennungsfenster: In Ruhe wächst der Kreis nur noch langsam (Rest-Bias, verzögerte Stillstandserkennung), beim Schrittverfahren durch angenommene Fehlerkennungen. Δs zurückgelegte Strecke, L Schrittlänge, r₀ Startunsicherheit (GPS-Genauigkeit, manuell 0 m), ψ₀ Startkursfehler (Kompassgenauigkeit, sonst ${ASSUME.headingErr0}°), σ und n aus der Kalibrierung, ${fmt(ASSUME.biasInst, 2)} m/s² angenommener Rest-Bias (Instabilität, Schwerkraftleck beim Drehen/Neigen). Drift- und Bias-Werte sind Annahmen, keine Messwerte.`)
   );
   const hint = h('p.ins-note', 'Sensordaten gibt es nur bei geöffneter App und entsperrtem Bildschirm (iOS). Beim Verlassen des Werkzeugs wird angehalten; der Verlauf bleibt gespeichert, läuft aber nicht im Hintergrund weiter.');
 
@@ -414,7 +416,7 @@ export function mount(body, ctx) {
     };
     det = new StepDetector();
     sd = new Strapdown({ zupt: cfg.zupt });
-    em = new ErrorModel({ method: cfg.method, e0: sp.e0, psi0: sp.psi0, b: run.bias ? run.bias.b : ASSUME.accelBias });
+    em = new ErrorModel({ method: cfg.method, e0: sp.e0, psi0: sp.psi0, b: run.bias ? run.bias.b : ASSUME.accelBias, stepLen: cfg.stepLen });
     run.em = em;
     lastHeading = sp.heading;
     noLinAcc = false; warnBg = false; note = ''; linOk = 0; linNull = 0;
@@ -554,7 +556,9 @@ export function mount(body, ctx) {
       const [x, y, z] = bias.correct(a.x, a.y, a.z);
       const R = rotationMatrix(rel.alpha + (haveRel ? c : 0), rel.beta, rel.gamma);
       const [aE, aN] = toENU(R, x, y, z);
-      sd.push(t, dt, aE, aN, Math.hypot(x, y, z));
+      const rr = e.rotationRate;
+      const gyro = rr && rr.alpha != null ? Math.hypot(rr.alpha, rr.beta || 0, rr.gamma || 0) : 0;
+      sd.push(t, dt, aE, aN, Math.hypot(x, y, z), gyro);
       if (sd.still) bias.adapt(a.x, a.y, a.z, dt);   // Bias im Stillstand nachführen
       const ds = sd.dist - run.dist;
       run.E = sd.pE; run.N = sd.pN; run.dist = sd.dist; run.speedNow = sd.speed;
